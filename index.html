@@ -19,6 +19,8 @@
   }
   header h1 { margin: 0 0 6px; }
   header p { margin: 0; opacity: .8; }
+  header nav { margin-top: 12px; }
+  header nav a { color: white; }
   main { max-width: 1250px; margin: auto; padding: 24px; }
   .controls {
     display: grid;
@@ -125,6 +127,7 @@
 <header>
   <h1>🍄 iNaturalist Sequenced Fungi Explorer</h1>
   <p>Explore fungal observations with DNA barcode records</p>
+  <nav><a href="about.html">About</a></nav>
 </header>
 
 <main>
@@ -168,10 +171,10 @@
     <label class="filter-control">
       <span>Sort by</span>
       <select id="sortFilter">
+        <option value="name" selected>Species name (A-Z)</option>
         <option value="observed_on">Date observed</option>
         <option value="created_at">Date added</option>
         <option value="updated_at">Recently updated</option>
-        <option value="name">Species name (A-Z)</option>
       </select>
     </label>
   </div>
