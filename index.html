@@ -198,6 +198,7 @@
 const API = "https://api.inaturalist.org/v1";
 const MATCH_SCAN_PAGE_SIZE = 200;
 const MATCH_SCAN_LIMIT = 10000;
+const MATCH_SCAN_CONCURRENCY = 3;
 
 function fetchApi(url) {
   if (typeof google === "undefined" || !google.script?.run) {
@@ -333,11 +334,7 @@ async function fetchAllMatchRecords() {
   await resolveProjectFilter();
 
   const searchParams = buildSearchParams();
-  const allRecords = [];
-  let totalResults = 0;
-  let pageNumber = 1;
-
-  while (allRecords.length < MATCH_SCAN_LIMIT) {
+  async function fetchPage(pageNumber) {
     const params = configureObservationParams(
       new URLSearchParams(searchParams),
       pageNumber,
@@ -347,16 +344,27 @@ async function fetchAllMatchRecords() {
     if (!response.ok) throw new Error("API error: " + response.status);
 
     const data = await response.json();
-    const records = Array.isArray(data) ? data : data.results || [];
-    if (pageNumber === 1) totalResults = Number(data.total_results) || records.length;
-    if (!records.length) break;
+    return {
+      records: Array.isArray(data) ? data : data.results || [],
+      totalResults: Number(data.total_results) || 0
+    };
+  }
 
-    allRecords.push(...records);
+  const firstPage = await fetchPage(1);
+  const allRecords = [...firstPage.records];
+  const totalResults = firstPage.totalResults || firstPage.records.length;
+  const recordsToScan = Math.min(totalResults, MATCH_SCAN_LIMIT);
+  const pageCount = Math.ceil(recordsToScan / MATCH_SCAN_PAGE_SIZE);
+
+  for (let firstPageInBatch = 2; firstPageInBatch <= pageCount; firstPageInBatch += MATCH_SCAN_CONCURRENCY) {
+    const pageNumbers = Array.from(
+      { length: Math.min(MATCH_SCAN_CONCURRENCY, pageCount - firstPageInBatch + 1) },
+      (_, index) => firstPageInBatch + index
+    );
+    const pages = await Promise.all(pageNumbers.map(fetchPage));
+    pages.forEach(page => allRecords.push(...page.records));
     document.getElementById("status").textContent =
       "Checking sequence matches: " + allRecords.length + " of " + totalResults + " records...";
-
-    if (allRecords.length >= totalResults) break;
-    pageNumber++;
   }
 
   return {
