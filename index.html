@@ -1,0 +1,755 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iNaturalist Sequenced Fungi Explorer</title>
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f4f5f2;
+    color: #26332b;
+  }
+  header {
+    background: #294b38;
+    color: white;
+    padding: 22px 30px;
+  }
+  header h1 { margin: 0 0 6px; }
+  header p { margin: 0; opacity: .8; }
+  main { max-width: 1250px; margin: auto; padding: 24px; }
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .filter-control { display: grid; gap: 6px; }
+  .filter-control > span { font-size: 13px; font-weight: 700; }
+  .location-control, .observer-control, .project-control { position: relative; }
+  .place-suggestions {
+    position: absolute;
+    z-index: 2;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ccc;
+    box-shadow: 0 3px 8px #00000018;
+  }
+  .place-suggestions button {
+    display: block;
+    width: 100%;
+    padding: 10px;
+    border-radius: 0;
+    background: white;
+    color: #26332b;
+    text-align: left;
+  }
+  .place-suggestions button:hover { background: #edf2ed; }
+  .checkbox-control { display: flex; align-items: center; gap: 8px; }
+  .checkbox-control input { width: 18px; height: 18px; margin: 0; }
+  .filter-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .filter-actions a { color: #356d4b; }
+  select, input, button {
+    padding: 11px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 15px;
+  }
+  select { min-width: 250px; }
+  button {
+    background: #294b38;
+    color: white;
+    border: none;
+    cursor: pointer;
+  }
+  button:hover { background: #3b684d; }
+  #status { margin: 15px 0; color: #58645b; }
+  #results {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 18px;
+  }
+  .card {
+    background: white;
+    border-radius: 9px;
+    overflow: hidden;
+    box-shadow: 0 2px 7px #00000012;
+  }
+  .card img {
+    display: block;
+    width: 100%;
+    height: 210px;
+    object-fit: cover;
+    background: #e5e8e4;
+  }
+  .card-media {
+    position: relative;
+    height: 210px;
+    background: #e5e8e4;
+  }
+  .card-no-photo {
+    height: 100%;
+    display: grid;
+    place-items: center;
+  }
+  .card-content { padding: 14px; }
+  .card h3 { margin: 0 0 8px; }
+  .card p { margin: 5px 0; font-size: 14px; color: #59645c; }
+  .match-indicator { color: #1f6b3b !important; font-weight: 700; }
+  .sequence-match-button {
+    margin: 5px 0;
+    padding: 7px 10px;
+    border: 1px solid #2e7650;
+    background: white;
+    color: #25623f;
+    font-size: 13px;
+  }
+  .sequence-match-button:hover { background: #e8f4eb; }
+  .card a { color: #356d4b; text-decoration: none; }
+  .card a:hover { text-decoration: underline; }
+  .field-info {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+  }
+  .muted { color: #748077; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🍄 iNaturalist Fungi Explorer</h1>
+  <p>Explore fungal observations with DNA barcode records</p>
+</header>
+
+<main>
+  <div class="field-info" id="status" aria-live="polite">
+    Results: Searching DNA-sequenced observations...
+  </div>
+
+  <form id="filtersForm">
+  <div class="controls">
+    <label class="filter-control">
+      <span>Filter loaded species</span>
+      <input id="search" placeholder="Filter displayed species...">
+    </label>
+    <label class="filter-control">
+      <span>Exact DNA sequence</span>
+      <input id="sequenceFilter" placeholder="Paste sequence; spaces ignored">
+    </label>
+    <div class="filter-control location-control">
+      <label for="locationFilter"><span>Location</span></label>
+      <input id="locationFilter" value="Australia" placeholder="Search a place" autocomplete="off" aria-autocomplete="list" aria-controls="placeSuggestions">
+      <div id="placeSuggestions" class="place-suggestions" role="listbox" hidden></div>
+    </div>
+    <div class="filter-control observer-control">
+      <label for="observerFilter"><span>Observer username</span></label>
+      <input id="observerFilter" placeholder="iNaturalist username" autocomplete="off" aria-autocomplete="list" aria-controls="userSuggestions">
+      <div id="userSuggestions" class="place-suggestions" role="listbox" hidden></div>
+    </div>
+    <div class="filter-control project-control">
+      <label for="projectFilter"><span>Research project</span></label>
+      <input id="projectFilter" placeholder="Search a project" autocomplete="off" aria-autocomplete="list" aria-controls="projectSuggestions">
+      <div id="projectSuggestions" class="place-suggestions" role="listbox" hidden></div>
+    </div>
+    <label class="filter-control">
+      <span>Observed after</span>
+      <input id="dateAfter" type="date">
+    </label>
+    <label class="filter-control">
+      <span>Observed before</span>
+      <input id="dateBefore" type="date">
+    </label>
+    <label class="filter-control">
+      <span>Sort by</span>
+      <select id="sortFilter">
+        <option value="observed_on">Date observed</option>
+        <option value="created_at">Date added</option>
+        <option value="updated_at">Recently updated</option>
+        <option value="name">Species name (A-Z)</option>
+      </select>
+    </label>
+  </div>
+  <div class="filter-actions">
+    <button type="submit">Load observations</button>
+    <button id="matchedSequenceToggle" class="sequence-match-button" type="button" aria-pressed="false">Show only sequences with matches</button>
+    <a id="nativeSearchLink" href="https://www.inaturalist.org/observations" target="_blank" rel="noopener">Open full iNaturalist filters</a>
+  </div>
+  </form>
+
+  <div id="results"></div>
+
+  <div style="text-align:center; margin:25px">
+    <button id="moreButton" onclick="nextPage()" style="display:none">
+      Load more
+    </button>
+  </div>
+</main>
+
+<script>
+const API = "https://api.inaturalist.org/v1";
+const MATCH_SCAN_PAGE_SIZE = 200;
+const MATCH_SCAN_LIMIT = 10000;
+
+function fetchApi(url) {
+  if (typeof google === "undefined" || !google.script?.run) {
+    return fetch(url);
+  }
+
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(result => resolve({
+        ok: result.ok,
+        status: result.status,
+        json: async () => result.data
+      }))
+      .withFailureHandler(error => reject(new Error(error.message || String(error))))
+      .fetchINaturalist(url);
+  });
+}
+
+let observations = [];
+let page = 1;
+let loading = false;
+let totalSearchResults = 0;
+let showOnlyMatchedSequences = false;
+let matchedScanIncomplete = false;
+let selectedPlaceId = 6744;
+let placeSearchTimer;
+let placeSearchRequest = 0;
+let selectedObserverId = null;
+let selectedObserverLogin = "";
+let userSearchTimer;
+let userSearchRequest = 0;
+let selectedProjectId = null;
+let selectedProjectTitle = "";
+let projectSearchTimer;
+let projectSearchRequest = 0;
+
+function normalizeDNASequence(value) {
+  if (!value) return "";
+
+  const sequence = String(value)
+    .replace(/^>.*$/gm, "")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+
+  return sequence.length >= 100 && /^[ACGTURYSWKMBDHVN.-]+$/.test(sequence)
+    ? sequence
+    : "";
+}
+
+function getObservationDNASequence(observation) {
+  const fieldValue = observation.ofvs?.find(value =>
+    Number(value.field_id) === 2330
+  ) || observation.observation_field_values?.find(value =>
+    Number(value.observation_field?.id) === 2330
+  );
+  return normalizeDNASequence(fieldValue?.value);
+}
+
+
+async function loadObservations(reset = true) {
+  if (loading) return;
+  loading = true;
+
+  if (reset) {
+    page = 1;
+    observations = [];
+    showOnlyMatchedSequences = false;
+    matchedScanIncomplete = false;
+    const matchedToggle = document.getElementById("matchedSequenceToggle");
+    matchedToggle.setAttribute("aria-pressed", "false");
+    matchedToggle.textContent = "Show only matched sequences";
+    document.getElementById("results").innerHTML = "";
+  }
+
+  const status = document.getElementById("status");
+  status.textContent = "Searching for DNA-sequenced observations...";
+
+  try {
+    await resolveObserverFilter();
+    await resolveProjectFilter();
+    const params = configureObservationParams(buildSearchParams(true), page, 24);
+    const response = await fetchApi(API + "/observations?" + params);
+
+    if (!response.ok) {
+      throw new Error("API error: " + response.status);
+    }
+
+    const data = await response.json();
+    const results = Array.isArray(data) ? data : data.results || [];
+    observations.push(...results);
+
+    totalSearchResults = Number.isFinite(data.total_results)
+      ? data.total_results
+      : observations.length;
+    updateResultSummary(renderObservations());
+
+    document.getElementById("moreButton").style.display =
+      results.length > 0 ? "inline-block" : "none";
+
+  } catch (error) {
+    status.textContent = "Error: " + error.message;
+  } finally {
+    loading = false;
+  }
+}
+
+function updateResultSummary(exactMatches) {
+  const sequenceFilter = normalizeDNASequence(
+    document.getElementById("sequenceFilter").value
+  );
+  const validSequencesLoaded = observations.filter(observation =>
+    getObservationDNASequence(observation)
+  ).length;
+  const summary = "Results: " + totalSearchResults + " ITS-field records match filters";
+  document.getElementById("status").textContent = sequenceFilter
+    ? summary + "; " + exactMatches + " exact sequence matches among " + validSequencesLoaded + " sequences"
+    : showOnlyMatchedSequences
+      ? summary + "; " + exactMatches + " observations with repeated sequences " +
+        (matchedScanIncomplete ? "in the first 10,000 checked" : "across the full search")
+      : summary;
+}
+
+function configureObservationParams(params, pageNumber, pageSize) {
+  params.delete("iconic_taxa[]");
+  params.set("iconic_taxa", "47170");
+  params.set("per_page", String(pageSize));
+  params.set("page", String(pageNumber));
+  return params;
+}
+
+async function fetchAllMatchRecords() {
+  await resolveObserverFilter();
+  await resolveProjectFilter();
+
+  const searchParams = buildSearchParams();
+  const allRecords = [];
+  let totalResults = 0;
+  let pageNumber = 1;
+
+  while (allRecords.length < MATCH_SCAN_LIMIT) {
+    const params = configureObservationParams(
+      new URLSearchParams(searchParams),
+      pageNumber,
+      MATCH_SCAN_PAGE_SIZE
+    );
+    const response = await fetchApi(API + "/observations?" + params);
+    if (!response.ok) throw new Error("API error: " + response.status);
+
+    const data = await response.json();
+    const records = Array.isArray(data) ? data : data.results || [];
+    if (pageNumber === 1) totalResults = Number(data.total_results) || records.length;
+    if (!records.length) break;
+
+    allRecords.push(...records);
+    document.getElementById("status").textContent =
+      "Checking sequence matches: " + allRecords.length + " of " + totalResults + " records...";
+
+    if (allRecords.length >= totalResults) break;
+    pageNumber++;
+  }
+
+  return {
+    records: allRecords,
+    totalResults,
+    incomplete: allRecords.length < totalResults
+  };
+}
+
+function buildSearchParams(includePaging = false) {
+  const params = new URLSearchParams();
+  const taxon = document.getElementById("taxonFilter")?.value.trim() || "";
+  const location = document.getElementById("locationFilter")?.value.trim() || "";
+  const observer = document.getElementById("observerFilter").value.trim();
+  const project = document.getElementById("projectFilter").value.trim();
+  const dateAfter = document.getElementById("dateAfter").value;
+  const dateBefore = document.getElementById("dateBefore").value;
+  const orderBy = document.getElementById("sortFilter").value;
+
+  params.set("field:DNA Barcode ITS", "");
+  params.set("iconic_taxa[]", "Fungi");
+  params.set("order_by", orderBy === "name" ? "observed_on" : orderBy);
+  params.set("order", "desc");
+
+  if (taxon) params.set("taxon_name", taxon);
+  if (location && selectedPlaceId) params.set("place_id", String(selectedPlaceId));
+  if (observer && selectedObserverId) {
+    params.set("user_id", String(selectedObserverId));
+  }
+  if (project && selectedProjectId) params.set("project_id", String(selectedProjectId));
+  if (dateAfter) params.set("d1", dateAfter);
+  if (dateBefore) params.set("d2", dateBefore);
+  if (document.getElementById("photosFilter")?.checked) params.set("photos", "true");
+
+  if (includePaging) {
+    params.set("per_page", "24");
+    params.set("page", String(page));
+  }
+
+  return params;
+}
+
+function updateNativeSearchLink() {
+  const params = buildSearchParams();
+  document.getElementById("nativeSearchLink").href =
+    "https://www.inaturalist.org/observations?" + params;
+}
+
+async function searchPlaces(query) {
+  const requestId = ++placeSearchRequest;
+  const suggestions = document.getElementById("placeSuggestions");
+
+  try {
+    const response = await fetchApi(
+      API + "/places/autocomplete?q=" + encodeURIComponent(query)
+    );
+    if (!response.ok) return;
+
+    const data = await response.json();
+    if (requestId !== placeSearchRequest) return;
+
+    suggestions.replaceChildren();
+    (data.results || []).slice(0, 8).forEach(place => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.role = "option";
+      option.textContent = place.display_name || place.name;
+      option.addEventListener("click", () => {
+        document.getElementById("locationFilter").value = option.textContent;
+        selectedPlaceId = place.id;
+        suggestions.hidden = true;
+        updateNativeSearchLink();
+      });
+      suggestions.appendChild(option);
+    });
+    suggestions.hidden = suggestions.childElementCount === 0;
+  } catch (error) {
+    suggestions.hidden = true;
+  }
+}
+
+async function resolveObserverFilter() {
+  const observer = document.getElementById("observerFilter").value.trim();
+  if (!observer) {
+    selectedObserverId = null;
+    selectedObserverLogin = "";
+    return;
+  }
+  if (selectedObserverId && selectedObserverLogin.toLowerCase() === observer.toLowerCase()) return;
+
+  const response = await fetchApi(
+    API + "/users/autocomplete?q=" + encodeURIComponent(observer)
+  );
+  if (!response.ok) throw new Error("Could not look up observer: " + response.status);
+
+  const data = await response.json();
+  const match = (data.results || []).find(
+    user => user.login.toLowerCase() === observer.toLowerCase()
+  );
+  if (!match) throw new Error("Choose a matching observer from the suggestions.");
+
+  selectedObserverId = match.id;
+  selectedObserverLogin = match.login;
+  updateNativeSearchLink();
+}
+
+async function searchUsers(query) {
+  const requestId = ++userSearchRequest;
+  const suggestions = document.getElementById("userSuggestions");
+
+  try {
+    const response = await fetchApi(
+      API + "/users/autocomplete?q=" + encodeURIComponent(query)
+    );
+    if (!response.ok) return;
+
+    const data = await response.json();
+    if (requestId !== userSearchRequest) return;
+
+    suggestions.replaceChildren();
+    (data.results || []).slice(0, 8).forEach(user => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.role = "option";
+      option.textContent = user.name && user.name !== user.login
+        ? user.login + " (" + user.name + ")"
+        : user.login;
+      option.addEventListener("click", () => {
+        document.getElementById("observerFilter").value = user.login;
+        selectedObserverId = user.id;
+        selectedObserverLogin = user.login;
+        suggestions.hidden = true;
+        updateNativeSearchLink();
+      });
+      suggestions.appendChild(option);
+    });
+    suggestions.hidden = suggestions.childElementCount === 0;
+  } catch (error) {
+    suggestions.hidden = true;
+  }
+}
+
+async function resolveProjectFilter() {
+  const project = document.getElementById("projectFilter").value.trim();
+  if (!project) {
+    selectedProjectId = null;
+    selectedProjectTitle = "";
+    return;
+  }
+  if (selectedProjectId && selectedProjectTitle.toLowerCase() === project.toLowerCase()) return;
+
+  const response = await fetchApi(
+    API + "/projects/autocomplete?q=" + encodeURIComponent(project)
+  );
+  if (!response.ok) throw new Error("Could not look up project: " + response.status);
+
+  const data = await response.json();
+  const match = (data.results || []).find(
+    item => item.title.toLowerCase() === project.toLowerCase()
+  );
+  if (!match) throw new Error("Choose a matching project from the suggestions.");
+
+  selectedProjectId = match.id;
+  selectedProjectTitle = match.title;
+  updateNativeSearchLink();
+}
+
+async function searchProjects(query) {
+  const requestId = ++projectSearchRequest;
+  const suggestions = document.getElementById("projectSuggestions");
+
+  try {
+    const response = await fetchApi(
+      API + "/projects/autocomplete?q=" + encodeURIComponent(query)
+    );
+    if (!response.ok) return;
+
+    const data = await response.json();
+    if (requestId !== projectSearchRequest) return;
+
+    suggestions.replaceChildren();
+    (data.results || []).slice(0, 8).forEach(project => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.role = "option";
+      option.textContent = project.title;
+      option.addEventListener("click", () => {
+        document.getElementById("projectFilter").value = project.title;
+        selectedProjectId = project.id;
+        selectedProjectTitle = project.title;
+        suggestions.hidden = true;
+        updateNativeSearchLink();
+      });
+      suggestions.appendChild(option);
+    });
+    suggestions.hidden = suggestions.childElementCount === 0;
+  } catch (error) {
+    suggestions.hidden = true;
+  }
+}
+
+function renderObservations() {
+  const filter = document.getElementById("search").value.toLowerCase();
+  const sequenceFilter = normalizeDNASequence(
+    document.getElementById("sequenceFilter").value
+  );
+  const results = document.getElementById("results");
+
+  results.innerHTML = "";
+
+  const sequenceCounts = new Map();
+  observations.forEach(observation => {
+    const sequence = getObservationDNASequence(observation);
+    if (sequence) sequenceCounts.set(sequence, (sequenceCounts.get(sequence) || 0) + 1);
+  });
+  const matchingObservations = observations.filter(observation => {
+    const matchesSpecies = (observation.taxon?.name || "").toLowerCase().includes(filter);
+    const sequence = getObservationDNASequence(observation);
+    if (!sequence) return false;
+    const matchesSequence = (!sequenceFilter || sequence === sequenceFilter) &&
+      (!showOnlyMatchedSequences || (sequenceCounts.get(sequence) || 0) > 1);
+    return matchesSpecies && matchesSequence;
+  });
+
+  if (document.getElementById("sortFilter").value === "name") {
+    matchingObservations.sort((a, b) => {
+      const nameA = a.taxon?.name || a.species_guess || "Unknown fungus";
+      const nameB = b.taxon?.name || b.species_guess || "Unknown fungus";
+      return nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
+    });
+  }
+
+  matchingObservations.forEach(obs => {
+      const photo = obs.photos?.[0];
+      const imageUrl = photo?.medium_url ||
+        (photo?.url ? photo.url.replace("square", "medium") : "");
+
+      const image = imageUrl
+        ? '<img src="' + escapeHtml(imageUrl) + '" loading="lazy" alt="">'
+        : '<div class="card-no-photo">No photo available</div>';
+
+      const card = document.createElement("article");
+      card.className = "card";
+
+      card.innerHTML =
+        '<div class="card-media">' + image + '</div>' +
+        '<div class="card-content">' +
+          (sequenceFilter ? '<p class="match-indicator">Exact DNA sequence match</p>' : "") +
+          '<h3>' + escapeHtml(obs.taxon?.name || obs.species_guess || "Unknown fungus") + '</h3>' +
+          '<p>📅 ' + escapeHtml(obs.observed_on || "Date unknown") + '</p>' +
+          '<p>👤 ' + escapeHtml(obs.user?.login || "Unknown observer") + '</p>' +
+          '<p class="observation-location">📍 ' + escapeHtml(obs.place_guess || "Location unavailable") + '</p>' +
+          '<p><a href="https://www.inaturalist.org/observations/' + encodeURIComponent(obs.id) +
+             '" target="_blank" rel="noopener">View on iNaturalist ↗</a></p>' +
+        '</div>';
+
+      const sequence = getObservationDNASequence(obs);
+      const sequenceCount = sequenceCounts.get(sequence) || 0;
+      if (sequenceCount > 1) {
+        const sequenceButton = document.createElement("button");
+        sequenceButton.type = "button";
+        sequenceButton.className = "sequence-match-button";
+        sequenceButton.textContent = "Show all genetic matches";
+        sequenceButton.title = "Filter for this sequence (" + sequenceCount + " loaded matches)";
+        sequenceButton.addEventListener("click", () => {
+          const sequenceInput = document.getElementById("sequenceFilter");
+          sequenceInput.value = sequence;
+          updateResultSummary(renderObservations());
+          sequenceInput.focus();
+        });
+        card.querySelector(".observation-location").after(sequenceButton);
+      }
+
+      results.appendChild(card);
+    });
+
+  return matchingObservations.length;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  })[char]);
+}
+
+function nextPage() {
+  page++;
+  loadObservations(false);
+}
+
+document.getElementById("filtersForm").addEventListener("submit", event => {
+  event.preventDefault();
+  loadObservations();
+});
+
+function refreshDisplayedResults() {
+  updateResultSummary(renderObservations());
+}
+
+document.getElementById("search").addEventListener("input", refreshDisplayedResults);
+document.getElementById("sequenceFilter").addEventListener("input", refreshDisplayedResults);
+document.getElementById("sortFilter").addEventListener("change", refreshDisplayedResults);
+document.getElementById("matchedSequenceToggle").addEventListener("click", async event => {
+  if (loading) return;
+  const button = event.currentTarget;
+
+  if (showOnlyMatchedSequences) {
+    showOnlyMatchedSequences = false;
+    matchedScanIncomplete = false;
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = "Show only sequences with matches";
+    refreshDisplayedResults();
+    return;
+  }
+
+  loading = true;
+  button.disabled = true;
+  button.textContent = "Scanning all search results...";
+  document.getElementById("moreButton").style.display = "none";
+
+  try {
+    const scan = await fetchAllMatchRecords();
+    observations = scan.records;
+    totalSearchResults = scan.totalResults;
+    matchedScanIncomplete = scan.incomplete;
+    showOnlyMatchedSequences = true;
+    button.setAttribute("aria-pressed", "true");
+    button.textContent = "Show all sequences";
+    updateResultSummary(renderObservations());
+    if (matchedScanIncomplete) {
+      document.getElementById("status").textContent += "; scan limit reached, narrow filters to check the rest";
+    }
+  } catch (error) {
+    showOnlyMatchedSequences = false;
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = "Show only matched sequences";
+    document.getElementById("moreButton").style.display =
+      observations.length < totalSearchResults ? "inline-block" : "none";
+    document.getElementById("status").textContent = "Error checking sequence matches: " + error.message;
+  } finally {
+    loading = false;
+    button.disabled = false;
+  }
+});
+
+document.getElementById("locationFilter").addEventListener("input", event => {
+  selectedPlaceId = null;
+  updateNativeSearchLink();
+  clearTimeout(placeSearchTimer);
+  const query = event.target.value.trim();
+  if (query.length < 2) {
+    document.getElementById("placeSuggestions").hidden = true;
+    return;
+  }
+  placeSearchTimer = setTimeout(() => searchPlaces(query), 300);
+});
+
+document.getElementById("observerFilter").addEventListener("input", event => {
+  selectedObserverId = null;
+  selectedObserverLogin = "";
+  updateNativeSearchLink();
+  clearTimeout(userSearchTimer);
+  const query = event.target.value.trim();
+  if (query.length < 2) {
+    document.getElementById("userSuggestions").hidden = true;
+    return;
+  }
+  userSearchTimer = setTimeout(() => searchUsers(query), 300);
+});
+
+document.getElementById("projectFilter").addEventListener("input", event => {
+  selectedProjectId = null;
+  selectedProjectTitle = "";
+  updateNativeSearchLink();
+  clearTimeout(projectSearchTimer);
+  const query = event.target.value.trim();
+  if (query.length < 2) {
+    document.getElementById("projectSuggestions").hidden = true;
+    return;
+  }
+  projectSearchTimer = setTimeout(() => searchProjects(query), 300);
+});
+
+document.querySelectorAll(".controls input, .controls select").forEach(control => {
+  control.addEventListener("change", updateNativeSearchLink);
+  if (control.id !== "locationFilter") {
+    control.addEventListener("input", updateNativeSearchLink);
+  }
+});
+
+updateNativeSearchLink();
+loadObservations();
+</script>
+</body>
+</html>
