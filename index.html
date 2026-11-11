@@ -374,6 +374,53 @@ async function fetchAllMatchRecords() {
   };
 }
 
+async function fetchGlobalSequenceMatches(sequence) {
+  await resolveObserverFilter();
+  await resolveProjectFilter();
+
+  const searchParams = buildSearchParams();
+  searchParams.delete("place_id");
+  searchParams.set("field:DNA Barcode ITS", sequence);
+
+  async function fetchPage(pageNumber) {
+    const params = configureObservationParams(
+      new URLSearchParams(searchParams),
+      pageNumber,
+      MATCH_SCAN_PAGE_SIZE
+    );
+    const response = await fetchApi(API + "/observations?" + params);
+    if (!response.ok) throw new Error("API error: " + response.status);
+
+    const data = await response.json();
+    return {
+      records: Array.isArray(data) ? data : data.results || [],
+      totalResults: Number(data.total_results) || 0
+    };
+  }
+
+  const firstPage = await fetchPage(1);
+  const records = firstPage.records.filter(observation =>
+    getObservationDNASequence(observation) === sequence
+  );
+  const totalResults = firstPage.totalResults || records.length;
+  const pageCount = Math.ceil(totalResults / MATCH_SCAN_PAGE_SIZE);
+
+  for (let firstPageInBatch = 2; firstPageInBatch <= pageCount; firstPageInBatch += MATCH_SCAN_CONCURRENCY) {
+    const pageNumbers = Array.from(
+      { length: Math.min(MATCH_SCAN_CONCURRENCY, pageCount - firstPageInBatch + 1) },
+      (_, index) => firstPageInBatch + index
+    );
+    const pages = await Promise.all(pageNumbers.map(fetchPage));
+    pages.forEach(page => records.push(...page.records.filter(observation =>
+      getObservationDNASequence(observation) === sequence
+    )));
+    document.getElementById("status").textContent =
+      "Loading global genetic matches: " + records.length + " of " + totalResults + " records...";
+  }
+
+  return { records, totalResults };
+}
+
 function buildSearchParams(includePaging = false) {
   const params = new URLSearchParams();
   const taxon = document.getElementById("taxonFilter")?.value.trim() || "";
@@ -411,6 +458,60 @@ function updateNativeSearchLink() {
   const params = buildSearchParams();
   document.getElementById("nativeSearchLink").href =
     "https://www.inaturalist.org/observations?" + params;
+}
+
+function buildPageStateParams() {
+  const params = new URLSearchParams();
+  params.set("inat_search", document.getElementById("search").value);
+  params.set("inat_sequence", document.getElementById("sequenceFilter").value);
+  params.set("inat_location", document.getElementById("locationFilter").value);
+  params.set("inat_observer", document.getElementById("observerFilter").value);
+  params.set("inat_project", document.getElementById("projectFilter").value);
+  params.set("inat_after", document.getElementById("dateAfter").value);
+  params.set("inat_before", document.getElementById("dateBefore").value);
+  params.set("inat_sort", document.getElementById("sortFilter").value);
+  params.set("inat_place_id", selectedPlaceId === null ? "" : String(selectedPlaceId));
+  return params;
+}
+
+function saveSearchToHistory() {
+  const url = new URL(window.location.href);
+  url.search = buildPageStateParams().toString();
+  history.pushState(null, "", url);
+}
+
+function restoreSearchFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const hasSavedSearch = params.has("inat_sort");
+  document.getElementById("search").value =
+    hasSavedSearch ? params.get("inat_search") || "" : "";
+  document.getElementById("sequenceFilter").value =
+    hasSavedSearch ? params.get("inat_sequence") || "" : "";
+  document.getElementById("locationFilter").value =
+    hasSavedSearch ? params.get("inat_location") || "" : "Australia";
+  document.getElementById("observerFilter").value =
+    hasSavedSearch ? params.get("inat_observer") || "" : "";
+  document.getElementById("projectFilter").value =
+    hasSavedSearch ? params.get("inat_project") || "" : "";
+  document.getElementById("dateAfter").value =
+    hasSavedSearch ? params.get("inat_after") || "" : "";
+  document.getElementById("dateBefore").value =
+    hasSavedSearch ? params.get("inat_before") || "" : "";
+
+  const sortFilter = document.getElementById("sortFilter");
+  const sort = hasSavedSearch ? params.get("inat_sort") : "name";
+  if ([...sortFilter.options].some(option => option.value === sort)) {
+    sortFilter.value = sort;
+  }
+
+  const placeId = hasSavedSearch ? params.get("inat_place_id") : "6744";
+  selectedPlaceId = placeId && Number.isFinite(Number(placeId))
+    ? Number(placeId)
+    : null;
+  selectedObserverId = null;
+  selectedObserverLogin = "";
+  selectedProjectId = null;
+  selectedProjectTitle = "";
 }
 
 async function searchPlaces(query) {
@@ -622,17 +723,35 @@ function renderObservations() {
         '</div>';
 
       const sequence = getObservationDNASequence(obs);
-      const sequenceCount = sequenceCounts.get(sequence) || 0;
-      if (sequenceCount > 1) {
+      if (sequence) {
         const sequenceButton = document.createElement("button");
         sequenceButton.type = "button";
         sequenceButton.className = "sequence-match-button";
         sequenceButton.textContent = "Show all genetic matches";
-        sequenceButton.title = "Filter for this sequence (" + sequenceCount + " loaded matches)";
-        sequenceButton.addEventListener("click", () => {
+        sequenceButton.title = "Find observations with this ITS sequence worldwide";
+        sequenceButton.addEventListener("click", async () => {
           const sequenceInput = document.getElementById("sequenceFilter");
           sequenceInput.value = sequence;
-          updateResultSummary(renderObservations());
+          document.getElementById("locationFilter").value = "";
+          selectedPlaceId = null;
+          saveSearchToHistory();
+          updateNativeSearchLink();
+          sequenceButton.disabled = true;
+          try {
+            const matches = await fetchGlobalSequenceMatches(sequence);
+            observations = matches.records;
+            totalSearchResults = matches.totalResults;
+            showOnlyMatchedSequences = false;
+            matchedScanIncomplete = false;
+            updateResultSummary(renderObservations());
+            document.getElementById("moreButton").style.display =
+              observations.length < totalSearchResults ? "inline-block" : "none";
+          } catch (error) {
+            document.getElementById("status").textContent =
+              "Error loading global genetic matches: " + error.message;
+          } finally {
+            sequenceButton.disabled = false;
+          }
           sequenceInput.focus();
         });
         card.querySelector(".observation-location").after(sequenceButton);
@@ -661,6 +780,13 @@ function nextPage() {
 
 document.getElementById("filtersForm").addEventListener("submit", event => {
   event.preventDefault();
+  saveSearchToHistory();
+  loadObservations();
+});
+
+window.addEventListener("popstate", () => {
+  restoreSearchFromUrl();
+  updateNativeSearchLink();
   loadObservations();
 });
 
@@ -690,6 +816,10 @@ document.getElementById("matchedSequenceToggle").addEventListener("click", async
   document.getElementById("moreButton").style.display = "none";
 
   try {
+    document.getElementById("locationFilter").value = "";
+    selectedPlaceId = null;
+    saveSearchToHistory();
+    updateNativeSearchLink();
     const scan = await fetchAllMatchRecords();
     observations = scan.records;
     totalSearchResults = scan.totalResults;
@@ -759,6 +889,7 @@ document.querySelectorAll(".controls input, .controls select").forEach(control =
   }
 });
 
+restoreSearchFromUrl();
 updateNativeSearchLink();
 loadObservations();
 </script>
