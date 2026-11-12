@@ -154,8 +154,8 @@
   <form id="filtersForm">
   <div class="controls">
     <label class="filter-control">
-      <span>Filter loaded species</span>
-      <input id="search" placeholder="Filter displayed species...">
+      <span>Taxon name or group</span>
+      <input id="search" placeholder="Filter by taxon name or group...">
     </label>
     <label class="filter-control">
       <span>Exact DNA sequence</span>
@@ -194,9 +194,9 @@
       </select>
     </label>
     <label class="filter-control">
-      <span>Genetic matches (after scan)</span>
+      <span>Match threshold</span>
       <select id="matchThreshold">
-        <option value="0">At least 1 genetic match</option>
+        <option value="0">More than 0 genetic matches</option>
         <option value="5">More than 5 genetic matches</option>
         <option value="10">More than 10 genetic matches</option>
         <option value="20">More than 20 genetic matches</option>
@@ -438,7 +438,10 @@ async function fetchSequenceMatches(sequence, onProgress) {
 
 function buildSearchParams(includePaging = false) {
   const params = new URLSearchParams();
-  const taxon = document.getElementById("taxonFilter")?.value.trim() || "";
+  const taxon = document.getElementById("search").value.trim();
+  const sequence = normalizeDNASequence(
+    document.getElementById("sequenceFilter").value
+  );
   const location = document.getElementById("locationFilter")?.value.trim() || "";
   const observer = document.getElementById("observerFilter").value.trim();
   const project = document.getElementById("projectFilter").value.trim();
@@ -446,7 +449,7 @@ function buildSearchParams(includePaging = false) {
   const dateBefore = document.getElementById("dateBefore").value;
   const orderBy = document.getElementById("sortFilter").value;
 
-  params.set("field:DNA Barcode ITS", "");
+  params.set("field:DNA Barcode ITS", sequence);
   params.set("iconic_taxa[]", "Fungi");
   params.set("order_by", orderBy === "name" ? "observed_on" : orderBy);
   params.set("order", "desc");
@@ -691,10 +694,13 @@ async function searchProjects(query) {
 
 function isSpeciesLevelObservation(observation) {
   const rank = observation.taxon?.rank?.toLowerCase() || "";
+  if (rank) {
+    return ["species", "subspecies", "variety", "form"].includes(rank) ||
+      rank.startsWith("species");
+  }
+
   const rankLevel = Number(observation.taxon?.rank_level);
-  return ["species", "subspecies", "variety", "form"].includes(rank) ||
-    rank.startsWith("species") ||
-    (Number.isFinite(rankLevel) && rankLevel > 0 && rankLevel <= 10);
+  return Number.isFinite(rankLevel) && rankLevel > 0 && rankLevel <= 10;
 }
 
 function buildSequenceSummaries(records) {
@@ -783,6 +789,7 @@ function renderObservations() {
           }
           return match.taxon?.name !== obs.taxon?.name;
         });
+        const displayedMatches = isSpeciesLevel ? conflictingMatches : otherMatches;
 
         if (!isSpeciesLevel || conflictingMatches.length) {
           const matchContext = document.createElement("div");
@@ -807,13 +814,23 @@ function renderObservations() {
             warningIcon.textContent = "⚠️ ";
             warning.append(
               warningIcon,
-              document.createTextNode("Same sequence also has different species-level IDs:")
+              document.createTextNode(isSpeciesLevel
+                ? "Same sequence also has different species-level IDs:"
+                : "Species-level IDs among matching observations:")
             );
             matchContext.appendChild(warning);
+          }
 
+          if (displayedMatches.length) {
+            if (!isSpeciesLevel) {
+              const listHeading = document.createElement("p");
+              listHeading.className = "match-status";
+              listHeading.textContent = "Matching observations:";
+              matchContext.appendChild(listHeading);
+            }
             const matchList = document.createElement("ul");
             matchList.className = "match-records";
-            conflictingMatches.slice(0, 5).forEach(match => {
+            displayedMatches.slice(0, 5).forEach(match => {
               const item = document.createElement("li");
               const link = document.createElement("a");
               link.href = "https://www.inaturalist.org/observations/" +
@@ -825,13 +842,18 @@ function renderObservations() {
               item.appendChild(link);
               matchList.appendChild(item);
             });
-            if (conflictingMatches.length > 5) {
+            if (displayedMatches.length > 5) {
               const remaining = document.createElement("li");
-              remaining.textContent = (conflictingMatches.length - 5) +
+              remaining.textContent = (displayedMatches.length - 5) +
                 " more matching observations; use “Show all genetic matches in selected filters” to review them.";
               matchList.appendChild(remaining);
             }
             matchContext.appendChild(matchList);
+          } else if (!isSpeciesLevel) {
+            const noMatches = document.createElement("p");
+            noMatches.className = "match-status";
+            noMatches.textContent = "No other matching observations in the checked results.";
+            matchContext.appendChild(noMatches);
           }
 
           card.querySelector(".card-content h3").after(matchContext);
