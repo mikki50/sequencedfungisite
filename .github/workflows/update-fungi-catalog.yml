@@ -1,0 +1,80 @@
+name: Update fungal ITS catalog
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+    - cron: "43 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: Rebuild the catalog from all current ITS observations
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fungi-catalog-pages
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out site
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test catalog builder
+        run: python -m unittest discover -s tests
+
+      - name: Prepare site files
+        run: |
+          mkdir -p _site
+          cp *.html README.md _site/
+
+      - name: Update catalog
+        env:
+          FULL_REFRESH: ${{ inputs.full_refresh || github.event.schedule == '43 4 * * 0' }}
+        run: |
+          if [ "$FULL_REFRESH" = "true" ]; then
+            python scripts/update_fungi_catalog.py --output-dir _site --force-full
+          else
+            python scripts/update_fungi_catalog.py --output-dir _site
+          fi
+
+      - name: Upload Pages artifact
+        id: pages-artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+          retention-days: 1
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Remove temporary Pages artifacts
+        if: always() && steps.pages-artifact.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api --paginate "repos/$REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == "github-pages") | .id' |
+            while read -r artifact_id; do
+              gh api --method DELETE "repos/$REPOSITORY/actions/artifacts/$artifact_id" || true
+            done

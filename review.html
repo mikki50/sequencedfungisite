@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequenced Fungi Review</title>
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f4f5f2;
+    color: #26332b;
+  }
+  header {
+    background: #294b38;
+    color: white;
+    padding: 22px 30px;
+  }
+  header h1 { margin: 0 0 6px; }
+  header p { margin: 0; opacity: .8; }
+  header nav { margin-top: 12px; }
+  header nav a { color: white; }
+  main { max-width: 1250px; margin: auto; padding: 24px; }
+  .review-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .review-tabs button {
+    padding: 9px 12px;
+    border: 1px solid #cbd5cc;
+    border-radius: 6px;
+    background: white;
+    color: #294b38;
+    cursor: pointer;
+  }
+  .review-tabs button[aria-selected="true"] {
+    background: #294b38;
+    color: white;
+  }
+  #reviewExplorer {
+    display: block;
+    width: 100%;
+    min-height: 75vh;
+    border: 0;
+    background: transparent;
+  }
+  @media (max-width: 600px) {
+    main { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sequenced Fungi Review</h1>
+  <p>Review DNA-sequenced observations by identification and quality</p>
+  <nav><a href="index.html">Back to explorer</a></nav>
+</header>
+
+<main>
+  <div class="review-tabs" role="tablist" aria-label="Review category">
+    <button type="button" role="tab" data-review-category="species-required" aria-selected="true">
+      Species level identification required
+    </button>
+    <button type="button" role="tab" data-review-category="mismatched-identifications" aria-selected="false">
+      Matched sequences with mismatched identifications
+    </button>
+    <button type="button" role="tab" data-review-category="not-research-grade" aria-selected="false">
+      Not research grade
+    </button>
+  </div>
+  <iframe
+    id="reviewExplorer"
+    src="index.html?review_mode=1&amp;inat_review_category=species-required"
+    title="Fungal observation review results"
+  ></iframe>
+</main>
+
+<script>
+const reviewExplorer = document.getElementById("reviewExplorer");
+const reviewTabs = [...document.querySelectorAll("[data-review-category]")];
+
+function selectReviewCategory(category, notifyExplorer = true) {
+  reviewTabs.forEach(tab => {
+    tab.setAttribute(
+      "aria-selected",
+      String(tab.dataset.reviewCategory === category)
+    );
+  });
+  if (notifyExplorer && reviewExplorer.contentWindow) {
+    reviewExplorer.contentWindow.postMessage({
+      type: "set-review-category",
+      category
+    }, "*");
+  }
+}
+
+reviewTabs.forEach(tab => {
+  tab.addEventListener("click", () => {
+    selectReviewCategory(tab.dataset.reviewCategory);
+  });
+});
+
+reviewExplorer.addEventListener("load", () => {
+  const activeTab = reviewTabs.find(tab => tab.getAttribute("aria-selected") === "true");
+  if (activeTab) selectReviewCategory(activeTab.dataset.reviewCategory);
+});
+
+window.addEventListener("message", event => {
+  if (event.source !== reviewExplorer.contentWindow || !event.data) return;
+  if (event.data.type === "review-category-changed") {
+    selectReviewCategory(event.data.category, false);
+  } else if (
+    event.data.type === "review-content-height" &&
+    Number.isFinite(event.data.height)
+  ) {
+    reviewExplorer.style.height = Math.max(600, event.data.height) + "px";
+  }
+});
+</script>
+</body>
+</html>
