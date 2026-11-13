@@ -15,11 +15,14 @@ hourly data files to the source branch. The workflow removes its temporary
 deployment artifact after each run so hourly snapshots do not accumulate in
 Actions artifact storage.
 
-On a first visit, the browser shows a clearly labeled preview while it downloads
-and caches the full compressed catalog in IndexedDB. Counts and global sequence
-matches become complete when caching finishes. Later visits use the local copy
-and refresh it at most once every 24 hours. Observation photos remain hosted by
-iNaturalist and are referenced by URL.
+The explorer opens with blank filters and does not request observations until
+the visitor submits a search. On a first search, a small preview appears while
+the full catalog is cached in IndexedDB; a spinner below the filters indicates
+loading. Global sequence matching is available after caching finishes. The
+current snapshot downloads at about 46 MB compressed and expands to about
+272 MiB of JSONL before IndexedDB overhead; actual browser storage use varies.
+Later visits use the local copy and refresh it at most once every 24 hours.
+Observation photos remain hosted by iNaturalist and are referenced by URL.
 
 Run the catalog unit tests with:
 

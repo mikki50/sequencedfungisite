@@ -13,6 +13,7 @@
     color: #26332b;
   }
   header {
+    position: relative;
     background: #294b38;
     color: white;
     padding: 22px 30px;
@@ -21,8 +22,40 @@
   .review-mode main { max-width: none; padding: 16px 24px; }
   header h1 { margin: 0 0 6px; }
   header p { margin: 0; opacity: .8; }
-  header nav { margin-top: 12px; }
-  header nav a { color: white; }
+  .about-link {
+    position: absolute;
+    top: 14px;
+    right: 30px;
+    color: white;
+    font-size: 12px;
+    opacity: .75;
+    text-decoration: none;
+  }
+  .about-link:hover { opacity: 1; text-decoration: underline; }
+  .site-navigation {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #ffffff33;
+  }
+  .site-navigation .review-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+    border: 1px solid #d9e1d8;
+    border-radius: 7px;
+    background: #f1f4ee;
+    color: #294b38;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .site-navigation .review-link:hover { background: white; }
+  .site-navigation .review-link span { font-size: 18px; line-height: 1; }
+  @media (max-width: 520px) {
+    header { padding: 54px 20px 20px; }
+    .about-link { right: 20px; }
+  }
   main { max-width: 1250px; margin: auto; padding: 24px; }
   .controls {
     display: grid;
@@ -135,7 +168,25 @@
     cursor: pointer;
   }
   button:hover { background: #3b684d; }
-  #status { margin: 15px 0; color: #58645b; }
+  .loading-indicator {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 16px;
+    color: #58645b;
+    font-size: 14px;
+  }
+  .loading-indicator[hidden], #status[hidden] { display: none; }
+  .loading-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #dce5dd;
+    border-top-color: #356d4b;
+    border-radius: 50%;
+    animation: loading-spin .8s linear infinite;
+  }
+  @keyframes loading-spin { to { transform: rotate(360deg); } }
+  #status { margin: 0 0 16px; color: #8b2924; font-size: 14px; }
   #results {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -219,28 +270,26 @@
   .review-pagination-gap { padding: 0 4px; color: #59645c; }
   .card a { color: #356d4b; text-decoration: none; }
   .card a:hover { text-decoration: underline; }
-  .field-info {
-    background: white;
-    padding: 15px;
-    border-radius: 8px;
-    margin-bottom: 20px;
-  }
   .muted { color: #748077; }
+  @media (prefers-reduced-motion: reduce) {
+    .loading-spinner { animation: none; }
+  }
 </style>
 </head>
 <body>
 
 <header>
+  <a class="about-link" href="about.html">About</a>
   <h1>🍄 iNaturalist Sequenced Fungi Explorer</h1>
   <p>Explore fungal observations with DNA barcode records</p>
-  <nav><a href="about.html">About</a> | <a href="review.html">Review</a></nav>
+  <nav class="site-navigation" aria-label="Site navigation">
+    <a class="review-link" href="review.html">
+      Review workspace <span aria-hidden="true">→</span>
+    </a>
+  </nav>
 </header>
 
 <main>
-  <div class="field-info" id="status" aria-live="polite">
-    Results: Searching DNA-sequenced observations...
-  </div>
-
   <form id="filtersForm">
   <details id="reviewFilters" class="review-filter-disclosure" open>
     <summary>Filters</summary>
@@ -260,7 +309,7 @@
     </label>
     <div class="filter-control location-control">
       <label for="locationFilter"><span>Location</span></label>
-      <input id="locationFilter" value="Australia" placeholder="Search a place" autocomplete="off" aria-autocomplete="list" aria-controls="placeSuggestions">
+      <input id="locationFilter" placeholder="Search a place" autocomplete="off" aria-autocomplete="list" aria-controls="placeSuggestions">
       <div id="placeSuggestions" class="place-suggestions" role="listbox" hidden></div>
     </div>
     <div class="filter-control observer-control">
@@ -321,6 +370,12 @@
   </details>
   </form>
 
+  <div id="loadingIndicator" class="loading-indicator" role="status" aria-live="polite" hidden>
+    <span class="loading-spinner" aria-hidden="true"></span>
+    <span id="loadingMessage">Loading observations...</span>
+  </div>
+  <div id="status" role="alert" hidden></div>
+
   <div id="results"></div>
 
   <div style="text-align:center; margin:25px">
@@ -348,11 +403,6 @@ const REVIEW_CATEGORIES = [
   "mismatched-identifications",
   "not-research-grade"
 ];
-const REVIEW_CATEGORY_LABELS = {
-  "species-required": "observations requiring species-level identification",
-  "mismatched-identifications": "observations with mismatched identifications",
-  "not-research-grade": "observations that are not research grade"
-};
 const initialPageParams = new URLSearchParams(window.location.search);
 const reviewMode = initialPageParams.get("review_mode") === "1";
 let reviewCategory = REVIEW_CATEGORIES.includes(
@@ -394,13 +444,12 @@ let observationDataVersion = 0;
 let catalogMode = false;
 let catalogRecords = null;
 let catalogLoadPromise = null;
-let catalogStatusNotice = "";
 let catalogDataPartial = false;
-let catalogPreviewRecordCount = 0;
 let sequenceSummaryCacheVersion = -1;
 let sequenceSummaryCache = new Map();
 let page = 1;
 let loading = false;
+let searchHasBeenSubmitted = false;
 let totalSearchResults = 0;
 let resultsPerPage = 30;
 let globalSequenceResults = false;
@@ -414,7 +463,7 @@ let selectedTaxonId = null;
 let selectedTaxonName = "";
 let taxonSearchTimer;
 let taxonSearchRequest = 0;
-let selectedPlaceId = 6744;
+let selectedPlaceId = null;
 let placeSearchTimer;
 let placeSearchRequest = 0;
 let selectedObserverId = null;
@@ -425,6 +474,24 @@ let selectedProjectId = null;
 let selectedProjectTitle = "";
 let projectSearchTimer;
 let projectSearchRequest = 0;
+
+function setLoading(isLoading, message = "Loading observations...") {
+  loading = isLoading;
+  const indicator = document.getElementById("loadingIndicator");
+  indicator.hidden = !isLoading;
+  if (isLoading) {
+    document.getElementById("loadingMessage").textContent = message;
+    const status = document.getElementById("status");
+    status.textContent = "";
+    status.hidden = true;
+  }
+}
+
+function showStatusError(message) {
+  const status = document.getElementById("status");
+  status.textContent = message;
+  status.hidden = false;
+}
 
 function normalizeDNASequence(value) {
   if (!value) return "";
@@ -634,9 +701,10 @@ async function loadStaticCatalog(onProgress) {
     );
   } catch (error) {
     if (cachedRecords.length) {
-      catalogStatusNotice =
+      showStatusError(
         "Could not check for a catalog update; using cached data from " +
-        new Date(metadata.generatedAt).toLocaleString() + ".";
+        new Date(metadata.generatedAt).toLocaleString() + "."
+      );
       console.warn("Could not check for a catalog update.", error);
       return cachedRecords;
     }
@@ -644,9 +712,10 @@ async function loadStaticCatalog(onProgress) {
   }
   if (manifestResponse.status === 404) {
     if (cachedRecords.length) {
-      catalogStatusNotice =
+      showStatusError(
         "Static catalog unavailable; using cached data from " +
-        new Date(metadata.generatedAt).toLocaleString() + ".";
+        new Date(metadata.generatedAt).toLocaleString() + "."
+      );
       return cachedRecords;
     }
     return null;
@@ -668,11 +737,6 @@ async function loadStaticCatalog(onProgress) {
   if (metadata && cachedRecords.length) {
     const isFresh = Date.now() - metadata.cachedAt < CATALOG_REFRESH_TTL_MS;
     if (metadata.version === manifest.catalog_version || isFresh) {
-      catalogStatusNotice = metadata.version === manifest.catalog_version
-        ? "Using the latest local catalog."
-        : "Using a cached catalog from " +
-          new Date(metadata.generatedAt).toLocaleString() +
-          "; it will refresh within 24 hours.";
       return cachedRecords;
     }
   }
@@ -684,15 +748,13 @@ async function loadStaticCatalog(onProgress) {
       manifest,
       cachedRecords.length ? null : onProgress
     );
-    if (cachedRecords.length) {
-      catalogStatusNotice = "Your saved catalog has been refreshed.";
-    }
     return records;
   } catch (error) {
     if (cachedRecords.length) {
-      catalogStatusNotice =
+      showStatusError(
         "Catalog refresh failed; using cached data from " +
-        new Date(metadata.generatedAt).toLocaleString() + ".";
+        new Date(metadata.generatedAt).toLocaleString() + "."
+      );
       console.error("Could not refresh the local observation catalog.", error);
       return cachedRecords;
     }
@@ -719,12 +781,11 @@ async function loadObservations(reset = true) {
     if (catalogDataPartial) {
       page = 1;
       renderObservations();
-      updateResultSummary();
       updateMoreButton();
     }
     return;
   }
-  loading = true;
+  setLoading(true);
   let catalogAvailable = false;
 
   if (reset) {
@@ -734,114 +795,78 @@ async function loadObservations(reset = true) {
     globalSequenceResults = false;
     globalSequence = "";
     catalogDataPartial = false;
-    catalogPreviewRecordCount = 0;
     document.getElementById("results").innerHTML = "";
     document.getElementById("moreButton").style.display = "none";
   }
 
   try {
     validateObservationIds();
-    let cachedCatalogShown = false;
-    const catalog = await ensureStaticCatalog((records, loaded, total, cached) => {
+    const catalog = await ensureStaticCatalog((records, loaded, _total, cached) => {
       if (cached) {
         observations = records;
         catalogMode = true;
-        cachedCatalogShown = true;
         catalogDataPartial = false;
-        catalogStatusNotice = "Using your saved catalog while checking for updates.";
         globalSequenceStates.clear();
         observationDataVersion++;
         catalogAvailable = true;
         renderObservations();
-        updateResultSummary();
         updateMoreButton();
         return;
       }
 
       if (!catalogDataPartial && loaded >= CATALOG_PREVIEW_RECORDS) {
         catalogDataPartial = true;
-        catalogPreviewRecordCount = CATALOG_PREVIEW_RECORDS;
         observations = records.slice(0, CATALOG_PREVIEW_RECORDS);
         catalogMode = true;
         globalSequenceStates.clear();
         observationDataVersion++;
-        catalogStatusNotice =
-          "Showing a preview from " + catalogPreviewRecordCount.toLocaleString() +
-          " observations while caching " + loaded.toLocaleString() + " of " +
-          total.toLocaleString() + ". Results and counts are provisional.";
         renderObservations();
-        updateResultSummary();
         updateMoreButton();
-      } else if (catalogDataPartial) {
-        catalogStatusNotice =
-          "Showing a preview from " + catalogPreviewRecordCount.toLocaleString() +
-          " observations while caching " + loaded.toLocaleString() + " of " +
-          total.toLocaleString() + ". Results and counts are provisional.";
-        updateResultSummary();
       }
     });
     if (!catalog) {
       catalogMode = false;
-      loading = false;
-      document.getElementById("status").textContent =
-        "Static catalog unavailable; searching iNaturalist directly.";
-      return loadObservationsFromApi(reset);
+      setLoading(false);
+      return await loadObservationsFromApi(reset);
     }
 
-    const hadPartialCatalog = catalogDataPartial;
     catalogDataPartial = false;
-    catalogPreviewRecordCount = 0;
     globalSequenceStates.clear();
     observations = catalog;
     catalogMode = true;
     observationDataVersion++;
     catalogAvailable = true;
-    if (hadPartialCatalog) {
-      catalogStatusNotice = "The full catalog is cached on this device.";
-    } else if (
-      cachedCatalogShown &&
-      catalogStatusNotice === "Using your saved catalog while checking for updates."
-    ) {
-      catalogStatusNotice = "Your saved catalog is up to date.";
-    } else if (!catalogStatusNotice) {
-      catalogStatusNotice = "Using the latest local catalog.";
-    }
     renderObservations();
-    updateResultSummary();
     updateMoreButton();
 
     await resolveTaxonFilter();
     await resolveObserverFilter();
     await resolveProjectFilter();
     renderObservations();
-    updateResultSummary();
     updateMoreButton();
   } catch (error) {
     if (catalogAvailable) {
-      catalogStatusNotice =
+      showStatusError(
         "Catalog results are available, but the latest catalog or a filter lookup failed: " +
-        error.message;
+        error.message
+      );
       console.error("Could not update the catalog or resolve a filter.", error);
-      updateResultSummary();
     } else if (catalogDataPartial && observations.length) {
-      catalogStatusNotice =
-        "Catalog caching failed; the displayed preview is incomplete.";
+      showStatusError("Catalog caching failed; the displayed preview is incomplete.");
       console.error("Could not finish caching the local observation catalog.", error);
-      updateResultSummary();
       updateMoreButton();
     } else {
-      document.getElementById("status").textContent =
-        "Error loading the local observation catalog: " + error.message;
+      showStatusError("Error loading the local observation catalog: " + error.message);
       if (reviewMode) updateMoreButton();
     }
   } finally {
-    loading = false;
+    setLoading(false);
   }
 }
 
 async function loadObservationsFromApi(reset = true) {
   if (loading) return;
-  loading = true;
+  setLoading(true);
   catalogMode = false;
 
   if (reset) {
@@ -853,11 +878,6 @@ async function loadObservationsFromApi(reset = true) {
     document.getElementById("results").innerHTML = "";
     document.getElementById("moreButton").style.display = "none";
   }
-
-  const status = document.getElementById("status");
-  status.textContent = reset
-    ? "Searching for DNA-sequenced observations..."
-    : "Loading more DNA-sequenced observations...";
 
   try {
     validateObservationIds();
@@ -905,33 +925,19 @@ async function loadObservationsFromApi(reset = true) {
         pages.forEach(pageData => {
           observations.push(...(Array.isArray(pageData) ? pageData : pageData.results || []));
         });
-        status.textContent =
-          "Loading review observations: " + observations.length + " of " + totalSearchResults;
       }
     }
 
     observationDataVersion++;
     renderObservations();
-    updateResultSummary();
 
     updateMoreButton(results.length > 0);
 
   } catch (error) {
-    status.textContent = "Error: " + error.message;
+    showStatusError("Error: " + error.message);
     if (reviewMode) updateMoreButton();
   } finally {
-    loading = false;
-  }
-}
-
-function updateResultSummary() {
-  document.getElementById("status").textContent = reviewMode
-    ? "Results: " + reviewResultCount + " " + REVIEW_CATEGORY_LABELS[reviewCategory]
-    : globalSequenceResults
-      ? "Results: " + totalSearchResults + " global genetic matches for this sequence"
-      : "Results: " + totalSearchResults + " ITS-field records match filters";
-  if (catalogStatusNotice) {
-    document.getElementById("status").textContent += " " + catalogStatusNotice;
+    setLoading(false);
   }
 }
 
@@ -980,7 +986,6 @@ function renderReviewPagination() {
       page = pageNumber;
       if (catalogMode || reviewMode || globalSequenceResults) {
         renderObservations();
-        updateResultSummary();
         updateMoreButton();
       }
     });
@@ -1026,7 +1031,6 @@ function setReviewCategory(category) {
   page = 1;
   saveSearchToHistory();
   reviewResultCount = renderObservations();
-  updateResultSummary();
   updateMoreButton();
   notifyReviewHost({ type: "review-category-changed", category });
 }
@@ -1295,8 +1299,7 @@ function queueGlobalSequenceCheck(sequence, observationId) {
         message: error.message,
         checkedAt: Date.now()
       });
-      document.getElementById("status").textContent =
-        "Error checking global genetic matches: " + error.message;
+      showStatusError("Error checking global genetic matches: " + error.message);
     } finally {
       globalSequenceChecksInFlight--;
       if (!globalSequenceResults) renderObservations();
@@ -1400,7 +1403,7 @@ function restoreSearchFromUrl() {
   document.getElementById("sequenceFilter").value =
     hasSavedSearch ? params.get("inat_sequence") || "" : "";
   document.getElementById("locationFilter").value =
-    hasSavedSearch ? params.get("inat_location") || "" : "Australia";
+    hasSavedSearch ? params.get("inat_location") || "" : "";
   document.getElementById("observerFilter").value =
     hasSavedSearch ? params.get("inat_observer") || "" : "";
   document.getElementById("projectFilter").value =
@@ -1428,7 +1431,7 @@ function restoreSearchFromUrl() {
   }
   matchThreshold = Number(matchThresholdFilter.value);
 
-  const placeId = hasSavedSearch ? params.get("inat_place_id") : "6744";
+  const placeId = hasSavedSearch ? params.get("inat_place_id") : null;
   selectedPlaceId = placeId && Number.isFinite(Number(placeId))
     ? Number(placeId)
     : null;
@@ -2043,14 +2046,13 @@ function renderObservations() {
                 globalSequence = sequence;
                 page = 1;
                 renderObservations();
-                updateResultSummary();
                 updateMoreButton();
                 sequenceButton.disabled = false;
                 sequenceButton.textContent = "Show all genetic matches globally";
                 return;
               }
 
-              loading = true;
+              setLoading(true, "Loading genetic matches...");
               try {
                 const matches = await fetchSequenceMatches(sequence, (loaded, total) => {
                   sequenceButton.textContent = "Loading matches: " + loaded + " of " + total;
@@ -2061,7 +2063,6 @@ function renderObservations() {
                     checkedAt: Date.now()
                   });
                   renderObservations();
-                  updateResultSummary();
                   updateMoreButton();
                   return;
                 }
@@ -2074,13 +2075,11 @@ function renderObservations() {
                 globalSequenceCheckQueue.length = 0;
                 page = 1;
                 renderObservations();
-                updateResultSummary();
                 updateMoreButton();
               } catch (error) {
-                document.getElementById("status").textContent =
-                  "Error loading global genetic matches: " + error.message;
+                showStatusError("Error loading global genetic matches: " + error.message);
               } finally {
-                loading = false;
+                setLoading(false);
                 if (sequenceButton.isConnected) {
                   sequenceButton.disabled = false;
                   sequenceButton.textContent = "Show all genetic matches globally";
@@ -2131,7 +2130,6 @@ function nextPage() {
   page++;
   if (globalSequenceResults) {
     renderObservations();
-    updateResultSummary();
     updateMoreButton();
     return;
   }
@@ -2157,19 +2155,20 @@ if (reviewMode && window.parent !== window && "ResizeObserver" in window) {
 
 document.getElementById("filtersForm").addEventListener("submit", event => {
   event.preventDefault();
+  searchHasBeenSubmitted = true;
   saveSearchToHistory();
   loadObservations();
 });
 
 window.addEventListener("popstate", () => {
   restoreSearchFromUrl();
+  searchHasBeenSubmitted = true;
   loadObservations();
 });
 
 function refreshDisplayedResults() {
   page = 1;
   renderObservations();
-  updateResultSummary();
   updateMoreButton();
 }
 
@@ -2199,9 +2198,8 @@ document.getElementById("resultsPerPage").addEventListener("change", event => {
   if (globalSequenceResults || reviewMode || catalogMode) {
     page = 1;
     renderObservations();
-    updateResultSummary();
     updateMoreButton();
-  } else {
+  } else if (searchHasBeenSubmitted) {
     loadObservations();
   }
 });
@@ -2248,7 +2246,7 @@ document.addEventListener("click", event => {
 });
 
 restoreSearchFromUrl();
-loadObservations();
+if (reviewMode) loadObservations();
 </script>
 </body>
 </html>
