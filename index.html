@@ -1437,19 +1437,27 @@ function buildSearchParams(includePaging = false) {
 
 function buildPageStateParams() {
   const params = new URLSearchParams();
-  params.set("inat_search", document.getElementById("search").value);
-  params.set("inat_per_page", String(resultsPerPage));
-  params.set("inat_taxon_id", selectedTaxonId === null ? "" : String(selectedTaxonId));
-  params.set("inat_observation_ids", document.getElementById("observationIds").value);
-  params.set("inat_sequence", document.getElementById("sequenceFilter").value);
-  params.set("inat_location", document.getElementById("locationFilter").value);
-  params.set("inat_observer", document.getElementById("observerFilter").value);
-  params.set("inat_project", document.getElementById("projectFilter").value);
-  params.set("inat_after", document.getElementById("dateAfter").value);
-  params.set("inat_before", document.getElementById("dateBefore").value);
-  params.set("inat_sort", document.getElementById("sortFilter").value);
-  params.set("inat_match_threshold", document.getElementById("matchThreshold").value);
-  params.set("inat_place_id", selectedPlaceId === null ? "" : String(selectedPlaceId));
+  const setIfPresent = (key, value) => {
+    const normalized = String(value).trim();
+    if (normalized) params.set(key, normalized);
+  };
+  setIfPresent("inat_search", document.getElementById("search").value);
+  if (resultsPerPage !== 30) params.set("inat_per_page", String(resultsPerPage));
+  if (selectedTaxonId !== null) params.set("inat_taxon_id", String(selectedTaxonId));
+  setIfPresent("inat_observation_ids", document.getElementById("observationIds").value);
+  setIfPresent("inat_sequence", document.getElementById("sequenceFilter").value);
+  setIfPresent("inat_location", document.getElementById("locationFilter").value);
+  setIfPresent("inat_observer", document.getElementById("observerFilter").value);
+  setIfPresent("inat_project", document.getElementById("projectFilter").value);
+  setIfPresent("inat_after", document.getElementById("dateAfter").value);
+  setIfPresent("inat_before", document.getElementById("dateBefore").value);
+  if (document.getElementById("sortFilter").value !== "name") {
+    setIfPresent("inat_sort", document.getElementById("sortFilter").value);
+  }
+  if (matchThreshold !== 0) {
+    setIfPresent("inat_match_threshold", document.getElementById("matchThreshold").value);
+  }
+  if (selectedPlaceId !== null) params.set("inat_place_id", String(selectedPlaceId));
   if (reviewMode) {
     params.set("review_mode", "1");
     params.set("inat_review_category", reviewCategory);
@@ -1475,7 +1483,21 @@ function restoreSearchFromUrl() {
       category: reviewCategory
     });
   }
-  const hasSavedSearch = params.has("inat_sort");
+  const hasSavedSearch = [
+    "inat_search",
+    "inat_taxon_id",
+    "inat_observation_ids",
+    "inat_sequence",
+    "inat_location",
+    "inat_observer",
+    "inat_project",
+    "inat_after",
+    "inat_before",
+    "inat_sort",
+    "inat_per_page",
+    "inat_match_threshold",
+    "inat_place_id"
+  ].some(key => params.has(key));
   document.getElementById("search").value =
     hasSavedSearch ? params.get("inat_search") || "" : "";
   const taxonId = hasSavedSearch ? params.get("inat_taxon_id") : null;
@@ -1499,17 +1521,17 @@ function restoreSearchFromUrl() {
     hasSavedSearch ? params.get("inat_before") || "" : "";
 
   const sortFilter = document.getElementById("sortFilter");
-  const sort = hasSavedSearch ? params.get("inat_sort") : "name";
+  const sort = params.get("inat_sort") || "name";
   if ([...sortFilter.options].some(option => option.value === sort)) {
     sortFilter.value = sort;
   }
-  const savedPageSize = hasSavedSearch ? params.get("inat_per_page") : "30";
+  const savedPageSize = params.get("inat_per_page") || "30";
   const resultsPerPageFilter = document.getElementById("resultsPerPage");
   if ([...resultsPerPageFilter.options].some(option => option.value === savedPageSize)) {
     resultsPerPageFilter.value = savedPageSize;
   }
   resultsPerPage = Number(resultsPerPageFilter.value);
-  const savedThreshold = hasSavedSearch ? params.get("inat_match_threshold") : "0";
+  const savedThreshold = params.get("inat_match_threshold") || "0";
   const matchThresholdFilter = document.getElementById("matchThreshold");
   if ([...matchThresholdFilter.options].some(option => option.value === savedThreshold)) {
     matchThresholdFilter.value = savedThreshold;
