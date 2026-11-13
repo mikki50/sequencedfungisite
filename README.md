@@ -23,6 +23,8 @@ current snapshot downloads at about 46 MB compressed and expands to about
 272 MiB of JSONL before IndexedDB overhead; actual browser storage use varies.
 Later visits use the local copy and refresh it at most once every 24 hours.
 Observation photos remain hosted by iNaturalist and are referenced by URL.
+Each observation card can share a link that opens the explorer filtered to and
+scrolled to that observation.
 
 Run the catalog unit tests with:
 

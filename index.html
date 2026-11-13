@@ -187,6 +187,11 @@
   }
   @keyframes loading-spin { to { transform: rotate(360deg); } }
   #status { margin: 0 0 16px; color: #8b2924; font-size: 14px; }
+  .no-results {
+    margin: 20px 0;
+    color: #58645b;
+    text-align: center;
+  }
   #results {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -218,6 +223,25 @@
   .card-content { padding: 14px; }
   .card h3 { margin: 0 0 8px; }
   .card p { margin: 5px 0; font-size: 14px; color: #59645c; }
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .card-actions a { font-size: 13px; font-weight: 700; }
+  .card-actions .share-button {
+    padding: 7px 10px;
+    border: 1px solid #cbd8cc;
+    background: white;
+    color: #294b38;
+    font-size: 13px;
+  }
+  .card-actions .share-button:hover { background: #edf2ed; }
+  .card.shared-observation {
+    outline: 3px solid #d3a82f;
+    outline-offset: 2px;
+  }
   .match-indicator { color: #1f6b3b !important; font-weight: 700; }
   .match-context {
     padding: 9px;
@@ -295,7 +319,7 @@
     <summary>Filters</summary>
   <div class="controls">
     <div class="filter-control taxon-control">
-      <label for="search"><span>Taxon name or group</span></label>
+      <label for="search"><span>Species or higher taxon</span></label>
       <input id="search" placeholder="Search taxa" autocomplete="off" aria-autocomplete="list" aria-controls="taxonSuggestions">
       <div id="taxonSuggestions" class="place-suggestions" role="listbox" hidden></div>
     </div>
@@ -377,6 +401,9 @@
   <div id="status" role="alert" hidden></div>
 
   <div id="results"></div>
+  <div id="noResults" class="no-results" role="status" aria-live="polite" hidden>
+    No results found. Try changing your filters.
+  </div>
 
   <div style="text-align:center; margin:25px">
     <button id="moreButton" onclick="nextPage()" style="display:none">
@@ -450,6 +477,8 @@ let sequenceSummaryCache = new Map();
 let page = 1;
 let loading = false;
 let searchHasBeenSubmitted = false;
+let sharedObservationId = null;
+let lastRenderedResultCount = null;
 let totalSearchResults = 0;
 let resultsPerPage = 30;
 let globalSequenceResults = false;
@@ -485,12 +514,62 @@ function setLoading(isLoading, message = "Loading observations...") {
     status.textContent = "";
     status.hidden = true;
   }
+  updateNoResultsMessage();
 }
 
 function showStatusError(message) {
   const status = document.getElementById("status");
   status.textContent = message;
   status.hidden = false;
+}
+
+function updateNoResultsMessage() {
+  const noResults = document.getElementById("noResults");
+  noResults.hidden = !(
+    (searchHasBeenSubmitted || reviewMode) &&
+    !loading &&
+    !catalogDataPartial &&
+    lastRenderedResultCount === 0
+  );
+}
+
+async function shareObservation(observation, button) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("observation_id", String(observation.id));
+  const name = observation.taxon?.name || observation.species_guess || "fungal observation";
+  const shareData = {
+    title: name,
+    text: "View this iNaturalist observation in the Sequenced Fungi Explorer.",
+    url: url.href
+  };
+
+  try {
+    if (navigator.share) {
+      await navigator.share(shareData);
+    } else if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url.href);
+      button.textContent = "Link copied";
+      setTimeout(() => {
+        if (button.isConnected) button.textContent = "Share";
+      }, 2000);
+    } else {
+      window.prompt("Copy this link to share the observation:", url.href);
+    }
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    console.error("Could not share the observation.", error);
+    showStatusError("Could not share this observation: " + error.message);
+  }
+}
+
+function scrollToSharedObservation() {
+  if (!sharedObservationId) return;
+  const card = document.getElementById("observation-" + sharedObservationId);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  card.focus({ preventScroll: true });
 }
 
 function normalizeDNASequence(value) {
@@ -791,6 +870,7 @@ async function loadObservations(reset = true) {
   if (reset) {
     page = 1;
     observations = [];
+    lastRenderedResultCount = null;
     observationDataVersion++;
     globalSequenceResults = false;
     globalSequence = "";
@@ -811,6 +891,7 @@ async function loadObservations(reset = true) {
         catalogAvailable = true;
         renderObservations();
         updateMoreButton();
+        scrollToSharedObservation();
         return;
       }
 
@@ -822,6 +903,7 @@ async function loadObservations(reset = true) {
         observationDataVersion++;
         renderObservations();
         updateMoreButton();
+        scrollToSharedObservation();
       }
     });
     if (!catalog) {
@@ -844,6 +926,7 @@ async function loadObservations(reset = true) {
     await resolveProjectFilter();
     renderObservations();
     updateMoreButton();
+    scrollToSharedObservation();
   } catch (error) {
     if (catalogAvailable) {
       showStatusError(
@@ -872,6 +955,7 @@ async function loadObservationsFromApi(reset = true) {
   if (reset) {
     page = 1;
     observations = [];
+    lastRenderedResultCount = null;
     observationDataVersion++;
     globalSequenceResults = false;
     globalSequence = "";
@@ -930,6 +1014,7 @@ async function loadObservationsFromApi(reset = true) {
 
     observationDataVersion++;
     renderObservations();
+    scrollToSharedObservation();
 
     updateMoreButton(results.length > 0);
 
@@ -1884,6 +1969,8 @@ function renderObservations() {
   }
 
   reviewResultCount = matchingObservations.length;
+  lastRenderedResultCount = matchingObservations.length;
+  updateNoResultsMessage();
   if (catalogMode) totalSearchResults = matchingObservations.length;
   const visibleObservations = globalSequenceResults || reviewMode || catalogMode
     ? matchingObservations.slice((page - 1) * resultsPerPage, page * resultsPerPage)
@@ -1900,6 +1987,11 @@ function renderObservations() {
 
       const card = document.createElement("article");
       card.className = "card";
+      card.id = "observation-" + String(obs.id);
+      if (String(obs.id) === sharedObservationId) {
+        card.classList.add("shared-observation");
+        card.tabIndex = -1;
+      }
 
       card.innerHTML =
         '<div class="card-media">' + image + '</div>' +
@@ -1909,9 +2001,16 @@ function renderObservations() {
           '<p>📅 ' + escapeHtml(obs.observed_on || "Date unknown") + '</p>' +
           '<p>👤 ' + escapeHtml(obs.user?.login || "Unknown observer") + '</p>' +
           '<p class="observation-location">📍 ' + escapeHtml(obs.place_guess || "Location unavailable") + '</p>' +
-          '<p><a href="https://www.inaturalist.org/observations/' + encodeURIComponent(obs.id) +
-             '" target="_blank" rel="noopener">View on iNaturalist ↗</a></p>' +
+          '<div class="card-actions">' +
+            '<a href="https://www.inaturalist.org/observations/' + encodeURIComponent(obs.id) +
+              '" target="_blank" rel="noopener">View on iNaturalist ↗</a>' +
+            '<button class="share-button" type="button">Share</button>' +
+          '</div>' +
         '</div>';
+
+      const shareButton = card.querySelector(".share-button");
+      shareButton.setAttribute("aria-label", "Share observation #" + obs.id);
+      shareButton.addEventListener("click", () => shareObservation(obs, shareButton));
 
       const sequence = getObservationDNASequence(obs);
       if (sequence) {
@@ -2246,7 +2345,21 @@ document.addEventListener("click", event => {
 });
 
 restoreSearchFromUrl();
-if (reviewMode) loadObservations();
+const sharedObservationIdParam = initialPageParams.get("observation_id");
+if (sharedObservationIdParam !== null) {
+  const linkedId = sharedObservationIdParam.trim();
+  const numericId = Number(linkedId);
+  if (!/^\d+$/.test(linkedId) || !Number.isSafeInteger(numericId) || numericId <= 0) {
+    showStatusError("This share link contains an invalid observation ID.");
+  } else {
+    sharedObservationId = String(numericId);
+    document.getElementById("observationIds").value = sharedObservationId;
+    searchHasBeenSubmitted = true;
+    loadObservations();
+  }
+} else if (reviewMode) {
+  loadObservations();
+}
 </script>
 </body>
 </html>
