@@ -338,6 +338,9 @@ const MATCH_SCAN_CONCURRENCY = 3;
 const CATALOG_DATABASE_NAME = "sequencedfungisite-catalog";
 const CATALOG_DATABASE_VERSION = 1;
 const CATALOG_REFRESH_TTL_MS = 24 * 60 * 60 * 1000;
+const CATALOG_IMPORT_BATCH_SIZE = 2500;
+const CATALOG_PREVIEW_RECORDS = 2000;
+const CATALOG_IMPORT_PROGRESS_INTERVAL = 10000;
 const GLOBAL_SEQUENCE_CACHE_PREFIX = "sequencedfungisite:global-sequence:v1:";
 const GLOBAL_SEQUENCE_CACHE_TTL_MS = 30 * 60 * 1000;
 const REVIEW_CATEGORIES = [
@@ -392,6 +395,8 @@ let catalogMode = false;
 let catalogRecords = null;
 let catalogLoadPromise = null;
 let catalogStatusNotice = "";
+let catalogDataPartial = false;
+let catalogPreviewRecordCount = 0;
 let sequenceSummaryCacheVersion = -1;
 let sequenceSummaryCache = new Map();
 let page = 1;
@@ -523,7 +528,7 @@ async function deleteOldCatalogVersions(database, currentVersion) {
   await transactionComplete(transaction);
 }
 
-async function importCatalog(database, catalogUrl, manifest) {
+async function importCatalog(database, catalogUrl, manifest, onProgress) {
   if (typeof DecompressionStream === "undefined") {
     throw new Error("This browser does not support gzip catalog downloads.");
   }
@@ -540,22 +545,25 @@ async function importCatalog(database, catalogUrl, manifest) {
   const decoder = new TextDecoder();
   let pendingText = "";
   let batch = [];
+  const records = [];
   let imported = 0;
 
   async function saveLine(line) {
     if (!line) return;
     const record = JSON.parse(line);
     record.catalogVersion = manifest.catalog_version;
+    records.push(record);
     batch.push(record);
     imported++;
-    if (batch.length >= 500) {
+    if (batch.length >= CATALOG_IMPORT_BATCH_SIZE) {
       await putCatalogBatch(database, batch);
       batch = [];
     }
-    if (imported % 5000 === 0) {
-      document.getElementById("status").textContent =
-        "Caching local catalog: " + imported.toLocaleString() +
-        " of " + Number(manifest.records).toLocaleString() + " observations...";
+    if (
+      imported === CATALOG_PREVIEW_RECORDS ||
+      imported % CATALOG_IMPORT_PROGRESS_INTERVAL === 0
+    ) {
+      onProgress?.(records, imported, Number(manifest.records), false);
     }
   }
 
@@ -593,10 +601,10 @@ async function importCatalog(database, catalogUrl, manifest) {
     generatedAt: manifest.generated_at
   });
   await deleteOldCatalogVersions(database, manifest.catalog_version);
-  return getCatalogRecords(database, manifest.catalog_version);
+  return records;
 }
 
-async function loadStaticCatalog() {
+async function loadStaticCatalog(onProgress) {
   if (window.location.protocol === "file:" || !("indexedDB" in window)) {
     return null;
   }
@@ -607,6 +615,14 @@ async function loadStaticCatalog() {
   if (metadata) {
     cachedRecords = await getCatalogRecords(database, metadata.version);
     if (cachedRecords.length !== Number(metadata.count)) cachedRecords = [];
+    if (cachedRecords.length) {
+      onProgress?.(
+        cachedRecords,
+        cachedRecords.length,
+        cachedRecords.length,
+        true
+      );
+    }
   }
 
   const baseUrl = new URL("data/", new URL(".", window.location.href));
@@ -662,11 +678,16 @@ async function loadStaticCatalog() {
   }
 
   try {
-    return await importCatalog(
+    const records = await importCatalog(
       database,
       new URL(manifest.catalog_file, baseUrl),
-      manifest
+      manifest,
+      cachedRecords.length ? null : onProgress
     );
+    if (cachedRecords.length) {
+      catalogStatusNotice = "Your saved catalog has been refreshed.";
+    }
+    return records;
   } catch (error) {
     if (cachedRecords.length) {
       catalogStatusNotice =
@@ -679,10 +700,10 @@ async function loadStaticCatalog() {
   }
 }
 
-async function ensureStaticCatalog() {
+async function ensureStaticCatalog(onProgress) {
   if (catalogRecords) return catalogRecords;
   if (!catalogLoadPromise) {
-    catalogLoadPromise = loadStaticCatalog();
+    catalogLoadPromise = loadStaticCatalog(onProgress);
   }
   try {
     catalogRecords = await catalogLoadPromise;
@@ -694,8 +715,17 @@ async function ensureStaticCatalog() {
 }
 
 async function loadObservations(reset = true) {
-  if (loading) return;
+  if (loading) {
+    if (catalogDataPartial) {
+      page = 1;
+      renderObservations();
+      updateResultSummary();
+      updateMoreButton();
+    }
+    return;
+  }
   loading = true;
+  let catalogAvailable = false;
 
   if (reset) {
     page = 1;
@@ -703,13 +733,53 @@ async function loadObservations(reset = true) {
     observationDataVersion++;
     globalSequenceResults = false;
     globalSequence = "";
+    catalogDataPartial = false;
+    catalogPreviewRecordCount = 0;
     document.getElementById("results").innerHTML = "";
     document.getElementById("moreButton").style.display = "none";
   }
 
   try {
     validateObservationIds();
-    const catalog = await ensureStaticCatalog();
+    let cachedCatalogShown = false;
+    const catalog = await ensureStaticCatalog((records, loaded, total, cached) => {
+      if (cached) {
+        observations = records;
+        catalogMode = true;
+        cachedCatalogShown = true;
+        catalogDataPartial = false;
+        catalogStatusNotice = "Using your saved catalog while checking for updates.";
+        globalSequenceStates.clear();
+        observationDataVersion++;
+        catalogAvailable = true;
+        renderObservations();
+        updateResultSummary();
+        updateMoreButton();
+        return;
+      }
+
+      if (!catalogDataPartial && loaded >= CATALOG_PREVIEW_RECORDS) {
+        catalogDataPartial = true;
+        catalogPreviewRecordCount = CATALOG_PREVIEW_RECORDS;
+        observations = records.slice(0, CATALOG_PREVIEW_RECORDS);
+        catalogMode = true;
+        globalSequenceStates.clear();
+        observationDataVersion++;
+        catalogStatusNotice =
+          "Showing a preview from " + catalogPreviewRecordCount.toLocaleString() +
+          " observations while caching " + loaded.toLocaleString() + " of " +
+          total.toLocaleString() + ". Results and counts are provisional.";
+        renderObservations();
+        updateResultSummary();
+        updateMoreButton();
+      } else if (catalogDataPartial) {
+        catalogStatusNotice =
+          "Showing a preview from " + catalogPreviewRecordCount.toLocaleString() +
+          " observations while caching " + loaded.toLocaleString() + " of " +
+          total.toLocaleString() + ". Results and counts are provisional.";
+        updateResultSummary();
+      }
+    });
     if (!catalog) {
       catalogMode = false;
       loading = false;
@@ -718,19 +788,52 @@ async function loadObservations(reset = true) {
       return loadObservationsFromApi(reset);
     }
 
-    await resolveTaxonFilter();
-    await resolveObserverFilter();
-    await resolveProjectFilter();
+    const hadPartialCatalog = catalogDataPartial;
+    catalogDataPartial = false;
+    catalogPreviewRecordCount = 0;
+    globalSequenceStates.clear();
     observations = catalog;
     catalogMode = true;
     observationDataVersion++;
+    catalogAvailable = true;
+    if (hadPartialCatalog) {
+      catalogStatusNotice = "The full catalog is cached on this device.";
+    } else if (
+      cachedCatalogShown &&
+      catalogStatusNotice === "Using your saved catalog while checking for updates."
+    ) {
+      catalogStatusNotice = "Your saved catalog is up to date.";
+    } else if (!catalogStatusNotice) {
+      catalogStatusNotice = "Using the latest local catalog.";
+    }
+    renderObservations();
+    updateResultSummary();
+    updateMoreButton();
+
+    await resolveTaxonFilter();
+    await resolveObserverFilter();
+    await resolveProjectFilter();
     renderObservations();
     updateResultSummary();
     updateMoreButton();
   } catch (error) {
-    document.getElementById("status").textContent =
-      "Error loading the local observation catalog: " + error.message;
-    if (reviewMode) updateMoreButton();
+    if (catalogAvailable) {
+      catalogStatusNotice =
+        "Catalog results are available, but the latest catalog or a filter lookup failed: " +
+        error.message;
+      console.error("Could not update the catalog or resolve a filter.", error);
+      updateResultSummary();
+    } else if (catalogDataPartial && observations.length) {
+      catalogStatusNotice =
+        "Catalog caching failed; the displayed preview is incomplete.";
+      console.error("Could not finish caching the local observation catalog.", error);
+      updateResultSummary();
+      updateMoreButton();
+    } else {
+      document.getElementById("status").textContent =
+        "Error loading the local observation catalog: " + error.message;
+      if (reviewMode) updateMoreButton();
+    }
   } finally {
     loading = false;
   }
@@ -1868,8 +1971,12 @@ function renderObservations() {
             warning.append(
               warningIcon,
               document.createTextNode(isSpeciesLevel
-                ? "Same sequence also has different species-level IDs (including global results):"
-                : "Species-level IDs among sequence matches (including global results):")
+                ? (catalogDataPartial
+                  ? "Same sequence also has different species-level IDs in the current preview:"
+                  : "Same sequence also has different species-level IDs (including global results):")
+                : (catalogDataPartial
+                  ? "Species-level IDs among matches in the current preview:"
+                  : "Species-level IDs among sequence matches (including global results):"))
             );
             matchContext.appendChild(warning);
           }
@@ -1878,7 +1985,9 @@ function renderObservations() {
             if (!isSpeciesLevel) {
               const listHeading = document.createElement("p");
               listHeading.className = "match-status";
-              listHeading.textContent = "Matching observations:";
+              listHeading.textContent = catalogDataPartial
+                ? "Matching observations in the current preview:"
+                : "Matching observations:";
               matchContext.appendChild(listHeading);
             }
             const matchList = document.createElement("ul");
@@ -1912,10 +2021,15 @@ function renderObservations() {
             const sequenceButton = document.createElement("button");
             sequenceButton.type = "button";
             sequenceButton.className = "sequence-match-button";
-            sequenceButton.textContent = "Show all genetic matches";
-            sequenceButton.title = "Find all iNaturalist observations with this ITS sequence";
+            sequenceButton.textContent = catalogDataPartial
+              ? "Caching: global matches unavailable"
+              : "Show all genetic matches";
+            sequenceButton.title = catalogDataPartial
+              ? "Wait for the full catalog to finish caching before viewing global matches."
+              : "Find all iNaturalist observations with this ITS sequence";
+            sequenceButton.disabled = catalogDataPartial;
             sequenceButton.addEventListener("click", async () => {
-              if (loading) return;
+              if (loading || catalogDataPartial) return;
               const sequenceInput = document.getElementById("sequenceFilter");
               const locationInput = document.getElementById("locationFilter");
               sequenceInput.value = sequence;

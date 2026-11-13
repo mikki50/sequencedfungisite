@@ -1,6 +1,9 @@
 name: Update fungal ITS catalog
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "17 * * * *"
     - cron: "43 4 * * 0"

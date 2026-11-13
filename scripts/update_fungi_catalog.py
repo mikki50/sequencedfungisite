@@ -298,7 +298,7 @@ def write_catalog(connection: sqlite3.Connection, output_path: Path) -> int:
             mtime=0,
         ) as compressed:
             cursor = connection.execute(
-                "SELECT payload FROM observations ORDER BY id"
+                "SELECT payload FROM observations ORDER BY id DESC"
             )
             count = 0
             for (payload,) in cursor:

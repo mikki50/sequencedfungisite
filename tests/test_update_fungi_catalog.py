@@ -1,6 +1,15 @@
+import gzip
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from scripts.update_fungi_catalog import compact_observation, normalize_sequence
+from scripts.update_fungi_catalog import (
+    compact_observation,
+    connect_catalog,
+    normalize_sequence,
+    write_catalog,
+)
 
 
 class NormalizeSequenceTests(unittest.TestCase):
@@ -54,6 +63,33 @@ class CompactObservationTests(unittest.TestCase):
             "ofvs": [{"field_id": 2330, "value": "too short"}],
         }
         self.assertIsNone(compact_observation(observation))
+
+
+class WriteCatalogTests(unittest.TestCase):
+    def test_writes_newest_observation_ids_first(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            connection.executemany(
+                "INSERT INTO observations (id, payload) VALUES (?, ?)",
+                [
+                    (1, json.dumps({"id": 1})),
+                    (2, json.dumps({"id": 2})),
+                ],
+            )
+            connection.commit()
+
+            output_path = root / "data" / "observations.jsonl.gz"
+            self.assertEqual(write_catalog(connection, output_path), 2)
+
+            with gzip.open(output_path, "rt", encoding="utf-8") as catalog:
+                observation_ids = [
+                    json.loads(line)["id"]
+                    for line in catalog
+                ]
+
+            self.assertEqual(observation_ids, [2, 1])
+            connection.close()
 
 
 if __name__ == "__main__":
