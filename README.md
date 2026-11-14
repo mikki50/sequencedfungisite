@@ -16,13 +16,15 @@ deployment artifact after each run so hourly snapshots do not accumulate in
 Actions artifact storage.
 
 The explorer opens with blank filters and does not request observations until
-the visitor submits a search. On a first search, a small preview appears while
-the full catalog is cached in IndexedDB; a spinner below the filters indicates
-loading. Global sequence matching is available after caching finishes. The
-current snapshot downloads at about 46 MB compressed and expands to about
-272 MiB of JSONL before IndexedDB overhead; actual browser storage use varies.
-Later visits use the local copy and refresh it at most once every 24 hours.
-Observation photos remain hosted by iNaturalist and are referenced by URL.
+the visitor submits a search. The workflow precomputes sequence match counts
+and review flags and publishes a compact search index and observation detail
+shards. The browser downloads the index and the shards needed for the current
+results; it does not build a persistent full-catalog cache. The prototype
+index was about 6.2 MB compressed, with a typical 30-result search downloading
+about 7 MB total before photos. Actual transfer and memory use vary by search
+and browser. Observation photos remain hosted by iNaturalist and are referenced
+by URL. The legacy compressed catalog remains available to the workflow for
+incremental updates and to older site versions.
 Each observation card can share a link that opens the explorer filtered to and
 scrolled to that observation.
 

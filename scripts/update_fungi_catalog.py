@@ -19,6 +19,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
 
+if __package__:
+    from .build_search_index import build_search_index
+else:
+    from build_search_index import build_search_index
+
 
 API_URL = "https://api.inaturalist.org/v1/observations"
 PAGE_SIZE = 200
@@ -316,6 +321,8 @@ def build_catalog(
     api_url: str = API_URL,
 ) -> dict[str, Any]:
     started_at = utc_now()
+    version = os.environ.get("GITHUB_RUN_ID") or started_at.strftime("%Y%m%dT%H%M%SZ")
+    index_dir = f"search-{version}"
     with tempfile.TemporaryDirectory(prefix="fungi-catalog-") as temp_dir:
         connection = connect_catalog(Path(temp_dir) / "catalog.sqlite")
         previous_manifest = None
@@ -350,12 +357,15 @@ def build_catalog(
         record_count = write_catalog(
             connection, output_dir / "data" / catalog_file
         )
+        index_count = build_search_index(connection, output_dir / "data" / index_dir)
+        if index_count != record_count:
+            raise RuntimeError("Search index and catalog record counts do not match.")
 
-    version = os.environ.get("GITHUB_RUN_ID") or started_at.strftime("%Y%m%dT%H%M%SZ")
     manifest = {
         "schema_version": 1,
         "catalog_version": version,
         "catalog_file": catalog_file,
+        "search_index": f"{index_dir}/index.json.gz",
         "records": record_count,
         "generated_at": timestamp(utc_now()),
         "last_successful_sync": timestamp(started_at),

@@ -196,6 +196,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 18px;
+    margin-top: 20px;
   }
   .card {
     background: white;
@@ -413,6 +414,7 @@
   <nav id="reviewPagination" class="review-pagination" aria-label="Result pages" hidden></nav>
 </main>
 
+<script src="catalog-search.js"></script>
 <script>
 const API = "https://api.inaturalist.org/v1";
 const MATCH_SCAN_PAGE_SIZE = 200;
@@ -471,6 +473,10 @@ let observationDataVersion = 0;
 let catalogMode = false;
 let catalogRecords = null;
 let catalogLoadPromise = null;
+let indexedCatalog = null;
+let indexedCatalogPromise = null;
+let indexedRenderVersion = 0;
+let indexedGlobalGroup = null;
 let catalogDataPartial = false;
 let sequenceSummaryCacheVersion = -1;
 let sequenceSummaryCache = new Map();
@@ -517,6 +523,12 @@ function setLoading(isLoading, message = "Loading observations...") {
   updateNoResultsMessage();
 }
 
+function setLoadingMessage(message) {
+  if (loading) {
+    document.getElementById("loadingMessage").textContent = message;
+  }
+}
+
 function showStatusError(message) {
   const status = document.getElementById("status");
   status.textContent = message;
@@ -538,17 +550,9 @@ async function shareObservation(observation, button) {
   url.search = "";
   url.hash = "";
   url.searchParams.set("observation_id", String(observation.id));
-  const name = observation.taxon?.name || observation.species_guess || "fungal observation";
-  const shareData = {
-    title: name,
-    text: "View this iNaturalist observation in the Sequenced Fungi Explorer.",
-    url: url.href
-  };
 
   try {
-    if (navigator.share) {
-      await navigator.share(shareData);
-    } else if (navigator.clipboard?.writeText) {
+    if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(url.href);
       button.textContent = "Link copied";
       setTimeout(() => {
@@ -771,6 +775,14 @@ async function loadStaticCatalog(onProgress) {
     }
   }
 
+  if (
+    metadata &&
+    cachedRecords.length &&
+    Date.now() - metadata.cachedAt < CATALOG_REFRESH_TTL_MS
+  ) {
+    return cachedRecords;
+  }
+
   const baseUrl = new URL("data/", new URL(".", window.location.href));
   let manifestResponse;
   try {
@@ -814,8 +826,11 @@ async function loadStaticCatalog(onProgress) {
   }
 
   if (metadata && cachedRecords.length) {
-    const isFresh = Date.now() - metadata.cachedAt < CATALOG_REFRESH_TTL_MS;
-    if (metadata.version === manifest.catalog_version || isFresh) {
+    if (metadata.version === manifest.catalog_version) {
+      await saveCatalogMetadata(database, {
+        ...metadata,
+        cachedAt: Date.now()
+      });
       return cachedRecords;
     }
   }
@@ -855,7 +870,94 @@ async function ensureStaticCatalog(onProgress) {
   }
 }
 
+async function openIndexedCatalog() {
+  if (window.location.protocol === "file:") return null;
+  const baseUrl = new URL("data/", new URL(".", window.location.href));
+  const response = await fetch(new URL("manifest.json", baseUrl), { cache: "no-cache" });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error("Catalog manifest request failed: " + response.status);
+  const manifest = await response.json();
+  if (!manifest.search_index) return null;
+  const index = await CatalogSearch.open(new URL(manifest.search_index, baseUrl));
+  if (index.data.rows.length !== Number(manifest.records)) {
+    throw new Error("Search index and catalog record counts do not match.");
+  }
+  return index;
+}
+
+async function refreshIndexedResults() {
+  const renderVersion = ++indexedRenderVersion;
+  setLoading(true, "Loading observations...");
+  try {
+    validateObservationIds();
+    await resolveProjectFilter();
+    const sequence = normalizeDNASequence(document.getElementById("sequenceFilter").value);
+    const result = await indexedCatalog.search({
+      taxon: document.getElementById("search").value.toLowerCase(),
+      taxonId: selectedTaxonId,
+      ids: parseObservationIds(),
+      location: document.getElementById("locationFilter").value.trim().toLowerCase(),
+      placeId: selectedPlaceId,
+      observer: document.getElementById("observerFilter").value.trim().toLowerCase(),
+      observerId: selectedObserverId,
+      project: document.getElementById("projectFilter").value.trim(),
+      projectId: selectedProjectId,
+      after: document.getElementById("dateAfter").value,
+      before: document.getElementById("dateBefore").value,
+      sequence,
+      globalGroup: indexedGlobalGroup,
+      threshold: matchThreshold,
+      review: reviewMode ? reviewCategory : "",
+      sort: document.getElementById("sortFilter").value,
+      page,
+      perPage: resultsPerPage
+    });
+    if (renderVersion !== indexedRenderVersion) return;
+    observations = result.observations;
+    renderObservations(result);
+    updateMoreButton();
+    scrollToSharedObservation();
+  } catch (error) {
+    if (renderVersion !== indexedRenderVersion) return;
+    console.error("Could not load indexed observations.", error);
+    lastRenderedResultCount = null;
+    document.getElementById("results").replaceChildren();
+    document.getElementById("reviewPagination").hidden = true;
+    showStatusError("Error loading observations: " + error.message);
+  } finally {
+    if (renderVersion === indexedRenderVersion) setLoading(false);
+  }
+}
+
 async function loadObservations(reset = true) {
+  if (reset) {
+    indexedGlobalGroup = null;
+    globalSequenceResults = false;
+  }
+  if (!indexedCatalogPromise) {
+    indexedCatalogPromise = openIndexedCatalog().catch(error => {
+      indexedCatalogPromise = null;
+      throw error;
+    });
+  }
+  if (!indexedCatalog) {
+    setLoading(true, "Loading search index...");
+    try {
+      indexedCatalog = await indexedCatalogPromise;
+    } catch (error) {
+      showStatusError("Error loading the search index: " + error.message);
+      console.error("Could not load the search index.", error);
+      setLoading(false);
+      return;
+    }
+    setLoading(false);
+  }
+  if (indexedCatalog) {
+    if (reset) page = 1;
+    catalogMode = true;
+    catalogDataPartial = false;
+    return refreshIndexedResults();
+  }
   if (loading) {
     if (catalogDataPartial) {
       page = 1;
@@ -883,6 +985,7 @@ async function loadObservations(reset = true) {
     validateObservationIds();
     const catalog = await ensureStaticCatalog((records, loaded, _total, cached) => {
       if (cached) {
+        setLoadingMessage("Using cached observations...");
         observations = records;
         catalogMode = true;
         catalogDataPartial = false;
@@ -895,8 +998,20 @@ async function loadObservations(reset = true) {
         return;
       }
 
+      if (catalogDataPartial) {
+        setLoadingMessage(
+          "Building local cache (" + loaded.toLocaleString() + " of " +
+          _total.toLocaleString() + " observations)..."
+        );
+        return;
+      }
+
       if (!catalogDataPartial && loaded >= CATALOG_PREVIEW_RECORDS) {
         catalogDataPartial = true;
+        setLoadingMessage(
+          "Building local cache (" + loaded.toLocaleString() + " of " +
+          _total.toLocaleString() + " observations)..."
+        );
         observations = records.slice(0, CATALOG_PREVIEW_RECORDS);
         catalogMode = true;
         globalSequenceStates.clear();
@@ -921,6 +1036,7 @@ async function loadObservations(reset = true) {
     renderObservations();
     updateMoreButton();
 
+    setLoadingMessage("Applying filters...");
     await resolveTaxonFilter();
     await resolveObserverFilter();
     await resolveProjectFilter();
@@ -930,10 +1046,9 @@ async function loadObservations(reset = true) {
   } catch (error) {
     if (catalogAvailable) {
       showStatusError(
-        "Catalog results are available, but the latest catalog or a filter lookup failed: " +
-        error.message
+        "Observations are loaded, but some filters could not be applied: " + error.message
       );
-      console.error("Could not update the catalog or resolve a filter.", error);
+      console.error("Could not resolve a filter for the loaded observations.", error);
     } else if (catalogDataPartial && observations.length) {
       showStatusError("Catalog caching failed; the displayed preview is incomplete.");
       console.error("Could not finish caching the local observation catalog.", error);
@@ -1069,7 +1184,9 @@ function renderReviewPagination() {
     button.disabled = pageNumber === page;
     button.addEventListener("click", () => {
       page = pageNumber;
-      if (catalogMode || reviewMode || globalSequenceResults) {
+      if (indexedCatalog) {
+        refreshIndexedResults();
+      } else if (catalogMode || reviewMode || globalSequenceResults) {
         renderObservations();
         updateMoreButton();
       }
@@ -1115,8 +1232,14 @@ function setReviewCategory(category) {
   reviewCategory = category;
   page = 1;
   saveSearchToHistory();
-  reviewResultCount = renderObservations();
-  updateMoreButton();
+  if (indexedCatalog) {
+    indexedGlobalGroup = null;
+    globalSequenceResults = false;
+    refreshIndexedResults();
+  } else {
+    reviewResultCount = renderObservations();
+    updateMoreButton();
+  }
   notifyReviewHost({ type: "review-category-changed", category });
 }
 
@@ -1458,6 +1581,12 @@ function buildPageStateParams() {
     setIfPresent("inat_match_threshold", document.getElementById("matchThreshold").value);
   }
   if (selectedPlaceId !== null) params.set("inat_place_id", String(selectedPlaceId));
+  if (selectedObserverId !== null) {
+    params.set("inat_observer_id", String(selectedObserverId));
+  }
+  if (selectedProjectId !== null) {
+    params.set("inat_project_id", String(selectedProjectId));
+  }
   if (reviewMode) {
     params.set("review_mode", "1");
     params.set("inat_review_category", reviewCategory);
@@ -1496,7 +1625,9 @@ function restoreSearchFromUrl() {
     "inat_sort",
     "inat_per_page",
     "inat_match_threshold",
-    "inat_place_id"
+    "inat_place_id",
+    "inat_observer_id",
+    "inat_project_id"
   ].some(key => params.has(key));
   document.getElementById("search").value =
     hasSavedSearch ? params.get("inat_search") || "" : "";
@@ -1542,10 +1673,22 @@ function restoreSearchFromUrl() {
   selectedPlaceId = placeId && Number.isFinite(Number(placeId))
     ? Number(placeId)
     : null;
-  selectedObserverId = null;
-  selectedObserverLogin = "";
-  selectedProjectId = null;
-  selectedProjectTitle = "";
+  const observerId = hasSavedSearch ? params.get("inat_observer_id") : null;
+  selectedObserverId = observerId && Number.isSafeInteger(Number(observerId)) &&
+    Number(observerId) > 0
+    ? Number(observerId)
+    : null;
+  selectedObserverLogin = selectedObserverId
+    ? document.getElementById("observerFilter").value
+    : "";
+  const projectId = hasSavedSearch ? params.get("inat_project_id") : null;
+  selectedProjectId = projectId && Number.isSafeInteger(Number(projectId)) &&
+    Number(projectId) > 0
+    ? Number(projectId)
+    : null;
+  selectedProjectTitle = selectedProjectId
+    ? document.getElementById("projectFilter").value
+    : "";
 }
 
 function parseObservationIds() {
@@ -1651,6 +1794,7 @@ async function resolveTaxonFilter() {
     return;
   }
   if (selectedTaxonId && selectedTaxonName.toLowerCase() === taxon.toLowerCase()) return;
+  if (catalogMode) return;
 
   const response = await fetchApi(
     API + "/taxa/autocomplete?q=" + encodeURIComponent(taxon)
@@ -1708,6 +1852,7 @@ async function resolveObserverFilter() {
     return;
   }
   if (selectedObserverId && selectedObserverLogin.toLowerCase() === observer.toLowerCase()) return;
+  if (catalogMode) return;
 
   const response = await fetchApi(
     API + "/users/autocomplete?q=" + encodeURIComponent(observer)
@@ -1767,6 +1912,9 @@ async function resolveProjectFilter() {
     return;
   }
   if (selectedProjectId && selectedProjectTitle.toLowerCase() === project.toLowerCase()) return;
+  if (catalogMode) {
+    throw new Error("Choose a project from the suggestions to apply this filter.");
+  }
 
   const response = await fetchApi(
     API + "/projects/autocomplete?q=" + encodeURIComponent(project)
@@ -1848,11 +1996,50 @@ function buildSequenceSummaries(records) {
 
     let summary = summaries.get(sequence);
     if (!summary) {
-      summary = { count: 0, observations: [] };
+      summary = {
+        count: 0,
+        observations: [],
+        speciesObservationCount: 0,
+        speciesTaxonIdCount: 0,
+        soleSpeciesTaxonId: null,
+        speciesTaxonNameCount: 0,
+        soleSpeciesTaxonName: undefined,
+        speciesWithoutTaxonIdNameCount: 0,
+        soleSpeciesWithoutTaxonIdName: undefined
+      };
       summaries.set(sequence, summary);
     }
     summary.count++;
     summary.observations.push(observation);
+    if (isSpeciesLevelObservation(observation)) {
+      summary.speciesObservationCount++;
+      const taxonId = observation.taxon?.id
+        ? String(observation.taxon.id)
+        : null;
+      const taxonName = observation.taxon?.name;
+      if (summary.speciesTaxonNameCount === 0) {
+        summary.speciesTaxonNameCount = 1;
+        summary.soleSpeciesTaxonName = taxonName;
+      } else if (summary.soleSpeciesTaxonName !== taxonName) {
+        summary.speciesTaxonNameCount = 2;
+        summary.soleSpeciesTaxonName = undefined;
+      }
+      if (taxonId) {
+        if (summary.speciesTaxonIdCount === 0) {
+          summary.speciesTaxonIdCount = 1;
+          summary.soleSpeciesTaxonId = taxonId;
+        } else if (summary.soleSpeciesTaxonId !== taxonId) {
+          summary.speciesTaxonIdCount = 2;
+          summary.soleSpeciesTaxonId = null;
+        }
+      } else if (summary.speciesWithoutTaxonIdNameCount === 0) {
+        summary.speciesWithoutTaxonIdNameCount = 1;
+        summary.soleSpeciesWithoutTaxonIdName = taxonName;
+      } else if (summary.soleSpeciesWithoutTaxonIdName !== taxonName) {
+        summary.speciesWithoutTaxonIdNameCount = 2;
+        summary.soleSpeciesWithoutTaxonIdName = undefined;
+      }
+    }
   });
   return summaries;
 }
@@ -1882,7 +2069,29 @@ function getConflictingSpeciesMatches(observation, sequenceSummary) {
   });
 }
 
-function renderObservations() {
+function hasConflictingSpeciesMatch(observation, sequenceSummary) {
+  if (!sequenceSummary?.speciesObservationCount) return false;
+  if (!isSpeciesLevelObservation(observation)) return true;
+
+  const taxonName = observation.taxon?.name;
+  if (observation.taxon?.id) {
+    const taxonId = String(observation.taxon.id);
+    const differentTaxonId = sequenceSummary.speciesTaxonIdCount > 1 ||
+      (sequenceSummary.speciesTaxonIdCount === 1 &&
+       sequenceSummary.soleSpeciesTaxonId !== taxonId);
+    const differentUnidentifiedName =
+      sequenceSummary.speciesWithoutTaxonIdNameCount > 0 &&
+      (sequenceSummary.speciesWithoutTaxonIdNameCount > 1 ||
+       sequenceSummary.soleSpeciesWithoutTaxonIdName !== taxonName);
+    return differentTaxonId || differentUnidentifiedName;
+  }
+
+  return sequenceSummary.speciesTaxonNameCount > 0 &&
+    (sequenceSummary.speciesTaxonNameCount > 1 ||
+     sequenceSummary.soleSpeciesTaxonName !== taxonName);
+}
+
+function renderObservations(indexedResult = null) {
   const filter = document.getElementById("search").value.toLowerCase();
   const observationIds = parseObservationIds();
   const sequenceFilter = normalizeDNASequence(
@@ -1897,8 +2106,9 @@ function renderObservations() {
 
   results.innerHTML = "";
 
-  const sequenceSummaries = getSequenceSummaries(observations);
-  let matchingObservations = observations.filter(observation => {
+  const sequenceSummaries = indexedResult
+    ? indexedResult.summaries : getSequenceSummaries(observations);
+  let matchingObservations = indexedResult ? observations : observations.filter(observation => {
     const taxonId = observation.taxon?.id;
     const ancestorIds = observation.taxon?.ancestor_ids || [];
     const matchesSelectedTaxon = selectedTaxonId === null ||
@@ -1912,18 +2122,22 @@ function renderObservations() {
     const matchesObservationId = globalSequenceResults || !observationIds.length ||
       observationIds.includes(String(observation.id));
     const matchesLocation = globalSequenceResults || !catalogMode ||
-      !locationFilter || !selectedPlaceId ||
-      (observation.place_ids || []).some(
-        id => String(id) === String(selectedPlaceId)
-      );
+      !locationFilter || (selectedPlaceId
+        ? (observation.place_ids || []).some(
+          id => String(id) === String(selectedPlaceId)
+        )
+        : (observation.place_guess || "").toLowerCase()
+          .includes(locationFilter.toLowerCase()));
     const matchesObserver = globalSequenceResults || !catalogMode ||
-      !observerFilter || !selectedObserverId ||
-      String(observation.user?.id) === String(selectedObserverId);
+      !observerFilter || (selectedObserverId
+        ? String(observation.user?.id) === String(selectedObserverId)
+        : (observation.user?.login || "").toLowerCase()
+          .includes(observerFilter.toLowerCase()));
     const matchesProject = globalSequenceResults || !catalogMode ||
-      !projectFilter || !selectedProjectId ||
-      (observation.project_ids || []).some(
-        id => String(id) === String(selectedProjectId)
-      );
+      !projectFilter || (selectedProjectId !== null &&
+        (observation.project_ids || []).some(
+          id => String(id) === String(selectedProjectId)
+        ));
     const observedOn = observation.observed_on || "";
     const matchesDate = globalSequenceResults || !catalogMode ||
       ((!dateAfter || (observedOn && observedOn >= dateAfter)) &&
@@ -1941,7 +2155,7 @@ function renderObservations() {
       matchesLocation && matchesObserver && matchesProject && matchesDate;
   });
 
-  if (reviewMode) {
+  if (reviewMode && !indexedResult) {
     const reviewSequenceSummaries = reviewCategory === "mismatched-identifications"
       ? catalogMode
         ? sequenceSummaries
@@ -1964,22 +2178,22 @@ function renderObservations() {
       }
       if (reviewCategory === "mismatched-identifications") {
         const sequence = getObservationDNASequence(observation);
-        return getConflictingSpeciesMatches(
-          observation,
-          reviewSequenceSummaries.get(sequence)
-        ).length > 0;
+        const summary = reviewSequenceSummaries.get(sequence);
+        return catalogMode
+          ? hasConflictingSpeciesMatch(observation, summary)
+          : getConflictingSpeciesMatches(observation, summary).length > 0;
       }
       return observation.quality_grade !== "research";
     });
   }
 
-  if (document.getElementById("sortFilter").value === "name") {
+  if (!indexedResult && document.getElementById("sortFilter").value === "name") {
     matchingObservations.sort((a, b) => {
       const nameA = a.taxon?.name || a.species_guess || "Unknown fungus";
       const nameB = b.taxon?.name || b.species_guess || "Unknown fungus";
       return nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
     });
-  } else if (catalogMode) {
+  } else if (!indexedResult && catalogMode) {
     const sortField = document.getElementById("sortFilter").value === "created_at"
       ? "created_at"
       : document.getElementById("sortFilter").value === "updated_at"
@@ -1990,11 +2204,12 @@ function renderObservations() {
     );
   }
 
-  reviewResultCount = matchingObservations.length;
-  lastRenderedResultCount = matchingObservations.length;
+  const resultCount = indexedResult ? indexedResult.count : matchingObservations.length;
+  reviewResultCount = resultCount;
+  lastRenderedResultCount = resultCount;
   updateNoResultsMessage();
-  if (catalogMode) totalSearchResults = matchingObservations.length;
-  const visibleObservations = globalSequenceResults || reviewMode || catalogMode
+  if (catalogMode) totalSearchResults = resultCount;
+  const visibleObservations = indexedResult ? matchingObservations : globalSequenceResults || reviewMode || catalogMode
     ? matchingObservations.slice((page - 1) * resultsPerPage, page * resultsPerPage)
     : matchingObservations;
 
@@ -2047,7 +2262,7 @@ function renderObservations() {
           ) {
             globalSequenceStates.delete(sequence);
           }
-          if (!globalSequenceStates.has(sequence)) {
+          if (catalogMode && !indexedResult && !globalSequenceStates.has(sequence)) {
             queueGlobalSequenceCheck(sequence, obs.id);
           }
         }
@@ -2141,13 +2356,24 @@ function renderObservations() {
         }
 
         if (!globalSequenceResults) {
-          if (sequenceSummary.count > 1 || globalMatchState?.status === "matches") {
+          const hasKnownMatches = sequenceSummary.count > 1 ||
+            globalMatchState?.status === "matches";
+          const canCheckGlobalMatches = !catalogMode &&
+            (!globalMatchState || globalMatchState.status === "error");
+          if (
+            hasKnownMatches ||
+            canCheckGlobalMatches
+          ) {
             const sequenceButton = document.createElement("button");
             sequenceButton.type = "button";
             sequenceButton.className = "sequence-match-button";
             sequenceButton.textContent = catalogDataPartial
               ? "Caching: global matches unavailable"
-              : "Show all genetic matches";
+              : hasKnownMatches
+                ? "Show all genetic matches"
+                : globalMatchState?.status === "error"
+                  ? "Retry global genetic matches"
+                  : "Check global genetic matches";
             sequenceButton.title = catalogDataPartial
               ? "Wait for the full catalog to finish caching before viewing global matches."
               : "Find all iNaturalist observations with this ITS sequence";
@@ -2162,6 +2388,14 @@ function renderObservations() {
               document.getElementById("placeSuggestions").hidden = true;
               saveSearchToHistory();
               sequenceButton.disabled = true;
+              if (indexedResult) {
+                indexedGlobalGroup = indexedCatalog.groupForObservation(obs.id);
+                globalSequenceResults = true;
+                globalSequence = sequence;
+                page = 1;
+                await refreshIndexedResults();
+                return;
+              }
               if (catalogMode) {
                 globalSequenceResults = true;
                 globalSequence = sequence;
@@ -2217,7 +2451,9 @@ function renderObservations() {
                 ? "No genetic sequence matches found"
                 : globalMatchState?.status === "error"
                   ? "Could not check global genetic matches: " + globalMatchState.message
-                : "No genetic matches found";
+                : !catalogMode && !globalMatchState
+                  ? "Global genetic matches not checked"
+                  : "No genetic matches found";
             card.querySelector(".observation-location").after(noMatches);
           }
         }
@@ -2231,7 +2467,7 @@ function renderObservations() {
       count: reviewResultCount
   });
   notifyReviewHost({ type: "review-content-height", height: document.documentElement.scrollHeight });
-  return matchingObservations.length;
+  return resultCount;
 }
 
 function escapeHtml(value) {
@@ -2289,6 +2525,12 @@ window.addEventListener("popstate", () => {
 
 function refreshDisplayedResults() {
   page = 1;
+  if (indexedCatalog) {
+    indexedGlobalGroup = null;
+    globalSequenceResults = false;
+    refreshIndexedResults();
+    return;
+  }
   renderObservations();
   updateMoreButton();
 }
@@ -2316,7 +2558,10 @@ document.getElementById("matchThreshold").addEventListener("change", event => {
 document.getElementById("resultsPerPage").addEventListener("change", event => {
   resultsPerPage = Number(event.target.value);
   saveSearchToHistory();
-  if (globalSequenceResults || reviewMode || catalogMode) {
+  if (indexedCatalog) {
+    page = 1;
+    refreshIndexedResults();
+  } else if (globalSequenceResults || reviewMode || catalogMode) {
     page = 1;
     renderObservations();
     updateMoreButton();

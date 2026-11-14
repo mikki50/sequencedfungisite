@@ -47,7 +47,7 @@ jobs:
       - name: Prepare site files
         run: |
           mkdir -p _site
-          cp *.html README.md _site/
+          cp *.html *.js README.md _site/
 
       - name: Update catalog
         env:

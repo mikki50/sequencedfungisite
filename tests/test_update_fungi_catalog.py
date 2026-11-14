@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from scripts.update_fungi_catalog import (
     normalize_sequence,
     write_catalog,
 )
+from scripts.build_search_index import build_search_index
 
 
 class NormalizeSequenceTests(unittest.TestCase):
@@ -89,6 +91,40 @@ class WriteCatalogTests(unittest.TestCase):
                 ]
 
             self.assertEqual(observation_ids, [2, 1])
+            connection.close()
+
+
+class SearchIndexTests(unittest.TestCase):
+    def test_match_flags_and_sequence_lookup_use_full_catalog(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            sequence = "ACGT" * 30
+            records = [
+                {"id": 1, "taxon": {"id": 10, "name": "Genus", "rank": "genus"},
+                 "ofvs": [{"field_id": 2330, "value": sequence}]},
+                {"id": 2, "taxon": {"id": 11, "name": "Genus species", "rank": "species"},
+                 "quality_grade": "research",
+                 "ofvs": [{"field_id": 2330, "value": sequence}]},
+                {"id": 3, "taxon": {"id": 12, "name": "Other species", "rank": "species"},
+                 "ofvs": [{"field_id": 2330, "value": sequence}]},
+                {"id": 4, "taxon": {"id": 11, "name": "Genus species", "rank": "species"},
+                 "ofvs": [{"field_id": 2330, "value": "T" * 120}]},
+            ]
+            connection.executemany(
+                "INSERT INTO observations (id,payload) VALUES (?,?)",
+                [(record["id"], json.dumps(record)) for record in records],
+            )
+            self.assertEqual(build_search_index(connection, root / "search"), 4)
+            with gzip.open(root / "search" / "index.json.gz", "rt", encoding="utf-8") as file:
+                index = json.load(file)
+            self.assertEqual(index["groupCounts"], [3, 1])
+            self.assertEqual([row[10] & 2 for row in index["rows"]], [2, 2, 2, 0])
+            with gzip.open(root / "search" / "details" / "0.json.gz", "rt", encoding="utf-8") as file:
+                self.assertEqual(json.load(file), records)
+            digest = hashlib.sha256(sequence.encode()).hexdigest()
+            with gzip.open(root / "search" / "hashes" / f"{digest[:2]}.json.gz", "rt", encoding="utf-8") as file:
+                self.assertEqual(json.load(file)[digest], [[0, 1]])
             connection.close()
 
 
