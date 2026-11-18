@@ -1,14 +1,21 @@
+import datetime as dt
 import gzip
 import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.update_fungi_catalog import (
+    CATALOG_DATA_VERSION,
+    backfill_sequence_dates,
+    build_catalog,
     compact_observation,
     connect_catalog,
+    download_previous_catalog,
     normalize_sequence,
+    store_observations,
     write_catalog,
 )
 from scripts.build_search_index import build_search_index
@@ -46,7 +53,10 @@ class CompactObservationTests(unittest.TestCase):
             "project_ids": [56],
             "user": {"id": 78, "login": "observer"},
             "photos": [{"url": "https://example.org/square.jpg"}],
-            "ofvs": [{"field_id": 2330, "value": sequence}],
+            "ofvs": [
+                {"field_id": 2330, "value": sequence},
+                {"field_id": 9864, "value": "https://mycomap.com/genetics/blast-search/example/"},
+            ],
             "description": "not retained",
             "location": "not retained",
         })
@@ -56,8 +66,17 @@ class CompactObservationTests(unittest.TestCase):
         self.assertEqual(compact["id"], 12)
         self.assertEqual(compact["photos"][0]["medium_url"], "https://example.org/medium.jpg")
         self.assertEqual(compact["ofvs"][0]["value"], sequence)
+        self.assertEqual(compact["mycoblast_url"], "https://mycomap.com/genetics/blast-search/example/")
         self.assertNotIn("description", compact)
         self.assertNotIn("location", compact)
+
+    def test_records_absent_mycoblast_link(self):
+        compact = compact_observation({
+            "id": 12,
+            "ofvs": [{"field_id": 2330, "value": "ACGT" * 30}],
+        })
+        self.assertIsNotNone(compact)
+        self.assertIsNone(compact["mycoblast_url"])
 
     def test_skips_observations_without_a_valid_its_value(self):
         observation = {
@@ -92,6 +111,144 @@ class WriteCatalogTests(unittest.TestCase):
 
             self.assertEqual(observation_ids, [2, 1])
             connection.close()
+
+
+class CatalogSyncTests(unittest.TestCase):
+    def test_outdated_manifest_does_not_download_old_catalog(self):
+        manifest = {"schema_version": 1}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            connection = connect_catalog(Path(temp_dir) / "catalog.sqlite")
+            with patch("scripts.update_fungi_catalog.request_json", return_value=manifest), \
+                 patch("scripts.update_fungi_catalog.urllib.request.urlopen") as download:
+                self.assertEqual(download_previous_catalog("https://example.org/data", connection), manifest)
+                download.assert_not_called()
+            connection.close()
+
+    def test_data_version_change_rebuilds_and_current_version_syncs_incrementally(self):
+        sequence = "ACGT" * 30
+        url = "https://mycomap.com/genetics/blast-search/example/"
+        record = {"id": 12, "ofvs": [
+            {"field_id": 2330, "value": sequence},
+            {"field_id": 9864, "value": url},
+        ]}
+        for previous_version, expected_mode in [(None, "full"), (CATALOG_DATA_VERSION, "incremental")]:
+            with self.subTest(mode=expected_mode), tempfile.TemporaryDirectory() as temp_dir:
+                manifest = {
+                    "last_successful_sync": "2026-01-01T00:00:00Z",
+                    "catalog_data_version": previous_version,
+                }
+
+                def load_previous(base_url, connection):
+                    old_record = {"id": 1, "ofvs": [{"field_id": 2330, "value": sequence}]}
+                    connection.execute(
+                        "INSERT INTO observations (id, payload) VALUES (?, ?)",
+                        (old_record["id"], json.dumps(old_record)),
+                    )
+                    return manifest
+
+                with patch("scripts.update_fungi_catalog.download_previous_catalog", side_effect=load_previous), \
+                     patch("scripts.update_fungi_catalog.fetch_observations", return_value=iter([record])) as fetch, \
+                     patch("scripts.update_fungi_catalog.backfill_sequence_dates", return_value=0):
+                    result = build_catalog(Path(temp_dir), base_url="https://example.org/data", force_full=False)
+
+                self.assertEqual(result["sync_mode"], expected_mode)
+                self.assertEqual(result["catalog_data_version"], CATALOG_DATA_VERSION)
+                params = fetch.call_args.args[0]
+                self.assertEqual("updated_since" in params, expected_mode == "incremental")
+                with gzip.open(Path(temp_dir) / "data" / "observations.jsonl.gz", "rt", encoding="utf-8") as file:
+                    records = [json.loads(line) for line in file]
+                self.assertEqual(len(records), 1 if expected_mode == "full" else 2)
+                self.assertEqual(next(item for item in records if item["id"] == 12)["mycoblast_url"], url)
+                with gzip.open(Path(temp_dir) / "data" / result["search_index"].replace("index.json.gz", "details/0.json.gz"), "rt", encoding="utf-8") as file:
+                    details = json.load(file)
+                self.assertEqual(next(item for item in details if item["id"] == 12)["mycoblast_url"], url)
+
+    def test_sequence_dates_survive_sync_only_for_the_same_field(self):
+        sequence = "ACGT" * 30
+        with tempfile.TemporaryDirectory() as temp_dir:
+            connection = connect_catalog(Path(temp_dir) / "catalog.sqlite")
+            old = [
+                {"id": 1, "sequence_field_value_id": 10, "sequence_uploaded_at": "2026-02-21T02:09:46Z"},
+                {"id": 2, "sequence_field_value_id": 20, "sequence_uploaded_at": "2026-02-21T02:09:46Z"},
+                {"id": 3, "sequence_field_value_id": 30, "sequence_uploaded_at": "2026-02-21T02:09:46Z"},
+            ]
+            connection.executemany(
+                "INSERT INTO observations (id, payload) VALUES (?, ?)",
+                [(record["id"], json.dumps(record)) for record in old],
+            )
+            incoming = iter([
+                {"id": 1, "ofvs": [{"id": 10, "field_id": 2330, "value": sequence}]},
+                {"id": 2, "ofvs": [{"id": 21, "field_id": 2330, "value": sequence}]},
+            ])
+            store_observations(connection, incoming, replace_catalog=True)
+            rows = {record["id"]: record for (payload,) in connection.execute("SELECT payload FROM observations")
+                    for record in [json.loads(payload)]}
+            self.assertEqual(set(rows), {1, 2})
+            self.assertEqual(rows[1]["sequence_uploaded_at"], "2026-02-21T02:09:46Z")
+            self.assertNotIn("sequence_uploaded_at", rows[2])
+            connection.close()
+
+    def test_backfill_uses_matching_field_and_skips_checked_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            connection = connect_catalog(Path(temp_dir) / "catalog.sqlite")
+            records = [
+                {"id": 1, "sequence_field_value_id": 10, "sequence_uploaded_at": None},
+                {"id": 2, "sequence_field_value_id": 20},
+                {"id": 3, "sequence_field_value_id": 30},
+            ]
+            connection.executemany(
+                "INSERT INTO observations (id, payload) VALUES (?, ?)",
+                [(record["id"], json.dumps(record)) for record in records],
+            )
+            responses = [
+                {"id": 3, "observation_field_values": [
+                    {"id": 30, "observation_field_id": 2330, "created_at": "2026-02-21T02:09:46Z"}]},
+                {"id": 2, "observation_field_values": [
+                    {"id": 99, "observation_field_id": 2330, "created_at": "2026-02-22T00:00:00Z"}]},
+            ]
+            with patch("scripts.update_fungi_catalog.request_json", side_effect=responses) as request:
+                self.assertEqual(backfill_sequence_dates(connection, 2), 2)
+            self.assertEqual(request.call_count, 2)
+            rows = {record["id"]: record for (payload,) in connection.execute("SELECT payload FROM observations")
+                    for record in [json.loads(payload)]}
+            self.assertEqual(rows[3]["sequence_uploaded_at"], "2026-02-21T02:09:46Z")
+            self.assertIsNone(rows[2]["sequence_uploaded_at"])
+            self.assertIsNone(rows[1]["sequence_uploaded_at"])
+            connection.close()
+
+    def test_backfill_recovers_field_id_for_older_catalog_records(self):
+        sequence = "ACGT" * 30
+        with tempfile.TemporaryDirectory() as temp_dir:
+            connection = connect_catalog(Path(temp_dir) / "catalog.sqlite")
+            record = {"id": 12, "ofvs": [{"field_id": 2330, "value": sequence}]}
+            connection.execute("INSERT INTO observations VALUES (?, ?)", (12, json.dumps(record)))
+            response = {"id": 12, "observation_field_values": [
+                {"id": 20, "observation_field_id": 2330, "value": sequence,
+                 "created_at": "2026-02-21T02:09:46Z"},
+            ]}
+            with patch("scripts.update_fungi_catalog.request_json", return_value=response):
+                self.assertEqual(backfill_sequence_dates(connection, 1), 1)
+            stored = json.loads(connection.execute("SELECT payload FROM observations").fetchone()[0])
+            self.assertEqual(stored["sequence_field_value_id"], 20)
+            self.assertEqual(stored["sequence_uploaded_at"], "2026-02-21T02:09:46Z")
+            connection.close()
+
+    def test_sequence_date_requests_obey_daily_cap(self):
+        manifest = {
+            "last_successful_sync": "2026-01-01T00:00:00Z",
+            "catalog_data_version": CATALOG_DATA_VERSION,
+            "sequence_date_day": "2026-01-01",
+            "sequence_date_requests": 4750,
+        }
+        now = dt.datetime.fromisoformat("2026-01-01T12:00:00+00:00")
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch("scripts.update_fungi_catalog.utc_now", return_value=now), \
+             patch("scripts.update_fungi_catalog.download_previous_catalog", return_value=manifest), \
+             patch("scripts.update_fungi_catalog.fetch_observations", return_value=iter([])), \
+             patch("scripts.update_fungi_catalog.backfill_sequence_dates", return_value=50) as backfill:
+            result = build_catalog(Path(temp_dir), base_url="https://example.org/data", force_full=False)
+        self.assertEqual(backfill.call_args.args[1], 50)
+        self.assertEqual(result["sequence_date_requests"], 4800)
 
 
 class SearchIndexTests(unittest.TestCase):

@@ -88,7 +88,8 @@ class CatalogSearch {
     return {
       id: row[0],
       taxon: { id: taxon[0], name: taxon[1], rank: row[10] & 1 ? "species" : "genus" },
-      species_guess: taxon[3]
+      species_guess: taxon[3],
+      place_guess: this.data.locations[row[3]]
     };
   }
 

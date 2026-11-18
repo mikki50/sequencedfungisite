@@ -227,6 +227,7 @@
   .card-actions {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 12px;
     margin-top: 12px;
   }
@@ -597,6 +598,73 @@ function getObservationDNASequence(observation) {
     Number(value.observation_field?.id) === 2330
   );
   return normalizeDNASequence(fieldValue?.value);
+}
+
+const countryNames = new Map();
+if (typeof Intl.DisplayNames === "function") {
+  const names = new Intl.DisplayNames(["en"], { type: "region" });
+  for (let first = 65; first <= 90; first++) {
+    for (let second = 65; second <= 90; second++) {
+      const code = String.fromCharCode(first, second);
+      const name = names.of(code);
+      if (name && name !== code) countryNames.set(name.toLowerCase(), code);
+    }
+  }
+}
+countryNames.set("usa", "US");
+countryNames.set("uk", "GB");
+
+function getCountryCode(observation) {
+  const parts = (observation.place_guess || "").split(",");
+  const last = parts[parts.length - 1].trim();
+  const namedCountry = countryNames.get(last.toLowerCase());
+  if (namedCountry) return namedCountry;
+  if (parts.length > 1 && /^[A-Z]{2}$/.test(last)) {
+    return [...countryNames.values()].includes(last) ? last : "";
+  }
+  return "";
+}
+
+function getMycoBlastValue(observation) {
+  return observation.mycoblast_url ?? observation.ofvs?.find(field =>
+    Number(field.field_id) === 9864
+  )?.value ?? observation.observation_field_values?.find(field =>
+    Number(field.observation_field?.id) === 9864
+  )?.value;
+}
+
+function getMycoBlastUrl(observation) {
+  const value = getMycoBlastValue(observation);
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" &&
+        ["mycomap.com", "www.mycomap.com", "mycomap.org", "www.mycomap.org"].includes(url.hostname)) {
+      return url.href;
+    }
+  } catch (error) {
+    console.warn("Invalid MycoBLAST URL for observation " + observation.id, error);
+    return "";
+  }
+  console.warn("Untrusted MycoBLAST URL for observation " + observation.id);
+  return "";
+}
+
+function addMycoBlastAction(card, observation) {
+  const actions = card.querySelector(".card-actions");
+  const url = getMycoBlastUrl(observation);
+  if (url) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "MycoBLAST ↗";
+    actions.appendChild(link);
+  } else if (getMycoBlastValue(observation)) {
+    const message = document.createElement("span");
+    message.textContent = "Invalid MycoBLAST link";
+    actions.appendChild(message);
+  }
 }
 
 
@@ -1306,7 +1374,8 @@ function writeGlobalSequenceCache(cacheKey, result) {
       rank: observation.taxon.rank,
       rank_level: observation.taxon.rank_level
     } : null,
-    species_guess: observation.species_guess
+    species_guess: observation.species_guess,
+    place_guess: observation.place_guess
   }));
 
   try {
@@ -2235,7 +2304,11 @@ function renderObservations(indexedResult = null) {
         '<div class="card-content">' +
           (sequenceFilter ? '<p class="match-indicator">Exact DNA sequence match</p>' : "") +
           '<h3>' + escapeHtml(obs.taxon?.name || obs.species_guess || "Unknown fungus") + '</h3>' +
-          '<p>📅 ' + escapeHtml(obs.observed_on || "Date unknown") + '</p>' +
+          '<p>iNat Number: #' + escapeHtml(obs.id) + '</p>' +
+          '<p>📅 Observation Date: ' + escapeHtml(obs.observed_on || "Unknown") + '</p>' +
+          '<p>📅 Sequence Uploaded: ' + escapeHtml(obs.sequence_uploaded_at
+            ? obs.sequence_uploaded_at.slice(0, 10)
+            : "sequence_uploaded_at" in obs ? "Unavailable" : "Not yet available") + '</p>' +
           '<p>👤 ' + escapeHtml(obs.user?.login || "Unknown observer") + '</p>' +
           '<p class="observation-location">📍 ' + escapeHtml(obs.place_guess || "Location unavailable") + '</p>' +
           '<div class="card-actions">' +
@@ -2248,6 +2321,7 @@ function renderObservations(indexedResult = null) {
       const shareButton = card.querySelector(".share-button");
       shareButton.setAttribute("aria-label", "Share observation #" + obs.id);
       shareButton.addEventListener("click", () => shareObservation(obs, shareButton));
+      addMycoBlastAction(card, obs);
 
       const sequence = getObservationDNASequence(obs);
       if (sequence) {
@@ -2339,7 +2413,8 @@ function renderObservations(indexedResult = null) {
               link.target = "_blank";
               link.rel = "noopener";
               const matchName = match.taxon?.name || match.species_guess || "Unknown identification";
-              link.textContent = matchName + " (iNaturalist observation #" + match.id + ")";
+              link.textContent = matchName + " (" + (getCountryCode(match) || "country unknown") +
+                ", #" + match.id + ")";
               item.appendChild(link);
               matchList.appendChild(item);
             });

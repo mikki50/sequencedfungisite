@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -26,8 +27,13 @@ else:
 
 
 API_URL = "https://api.inaturalist.org/v1/observations"
+LEGACY_OBSERVATION_URL = "https://www.inaturalist.org/observations"
 PAGE_SIZE = 200
+SEQUENCE_DATE_BATCH_SIZE = 200
+SEQUENCE_DATE_DAILY_LIMIT = 4800
 ITS_FIELD_ID = 2330
+MYCOBLAST_FIELD_ID = 9864
+CATALOG_DATA_VERSION = 1
 FUNGI_ICONIC_TAXON_ID = 47170
 REQUEST_INTERVAL_SECONDS = 1.05
 UPDATE_OVERLAP = dt.timedelta(hours=1)
@@ -77,6 +83,12 @@ def compact_observation(observation: dict[str, Any]) -> dict[str, Any] | None:
     if photo_url:
         photo_url = photo_url.replace("square", "medium")
 
+    blast_field = next(
+        (field for field in observation.get("ofvs", [])
+         if str(field.get("field_id")) == str(MYCOBLAST_FIELD_ID)),
+        None,
+    )
+
     return {
         "id": observation["id"],
         "taxon": {
@@ -100,6 +112,8 @@ def compact_observation(observation: dict[str, Any]) -> dict[str, Any] | None:
         },
         "photos": [{"medium_url": photo_url}] if photo_url else [],
         "ofvs": [{"field_id": ITS_FIELD_ID, "value": sequence}],
+        "mycoblast_url": blast_field.get("value") if blast_field else None,
+        "sequence_field_value_id": field_value.get("id"),
     }
 
 
@@ -206,7 +220,7 @@ def store_observations(
     replace_catalog: bool,
 ) -> tuple[int, int]:
     if replace_catalog:
-        connection.execute("DELETE FROM observations")
+        connection.execute("CREATE TEMP TABLE seen_observations (id INTEGER PRIMARY KEY)")
 
     changed = 0
     accepted = 0
@@ -214,11 +228,22 @@ def store_observations(
         changed += 1
         compact = compact_observation(observation)
         observation_id = int(observation["id"])
+        if replace_catalog:
+            connection.execute("INSERT INTO seen_observations (id) VALUES (?)", (observation_id,))
         if compact is None:
             connection.execute(
                 "DELETE FROM observations WHERE id = ?", (observation_id,)
             )
         else:
+            previous = connection.execute(
+                "SELECT payload FROM observations WHERE id = ?", (observation_id,)
+            ).fetchone()
+            if previous:
+                previous_record = json.loads(previous[0])
+                field_id = compact["sequence_field_value_id"]
+                if field_id and str(previous_record.get("sequence_field_value_id")) == str(field_id):
+                    if "sequence_uploaded_at" in previous_record:
+                        compact["sequence_uploaded_at"] = previous_record["sequence_uploaded_at"]
             connection.execute(
                 "INSERT INTO observations (id, payload) VALUES (?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
@@ -233,8 +258,68 @@ def store_observations(
             connection.commit()
             print(f"Processed {changed} changed observations.", flush=True)
 
+    if replace_catalog:
+        connection.execute(
+            "DELETE FROM observations WHERE id NOT IN (SELECT id FROM seen_observations)"
+        )
+        connection.execute("DROP TABLE seen_observations")
     connection.commit()
     return changed, accepted
+
+
+def backfill_sequence_dates(connection: sqlite3.Connection, limit: int) -> int:
+    if limit <= 0:
+        return 0
+    pending = []
+    for observation_id, payload in connection.execute(
+        "SELECT id, payload FROM observations ORDER BY id DESC"
+    ):
+        record = json.loads(payload)
+        if "sequence_uploaded_at" not in record:
+            pending.append((observation_id, record))
+            if len(pending) >= limit:
+                break
+
+    for observation_id, record in pending:
+        try:
+            response = request_json(
+                f"{LEGACY_OBSERVATION_URL}/{observation_id}.json", api_request=True
+            )
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            print(f"Observation {observation_id} is unavailable for sequence-date lookup.", file=sys.stderr)
+            response = None
+
+        if response is not None and not isinstance(response, dict):
+            raise RuntimeError(f"Invalid sequence-date response for observation {observation_id}.")
+        if response is not None and str(response.get("id")) != str(observation_id):
+            raise RuntimeError(f"Sequence-date response has the wrong observation ID for {observation_id}.")
+        field = next(
+            (item for item in (response or {}).get("observation_field_values", [])
+             if str(item.get("observation_field_id")) == str(ITS_FIELD_ID)),
+            None,
+        )
+        expected_id = record.get("sequence_field_value_id")
+        matching_field = field and (
+            (expected_id and str(field.get("id")) == str(expected_id)) or
+            (not expected_id and field.get("id") and
+             normalize_sequence(field.get("value")) == record["ofvs"][0]["value"])
+        )
+        if matching_field:
+            record["sequence_field_value_id"] = field["id"]
+            record["sequence_uploaded_at"] = field.get("created_at")
+            if not record["sequence_uploaded_at"]:
+                print(f"Sequence date missing for observation {observation_id}.", file=sys.stderr)
+        else:
+            record["sequence_uploaded_at"] = None
+            print(f"Sequence date unavailable or changed for observation {observation_id}.", file=sys.stderr)
+        connection.execute(
+            "UPDATE observations SET payload = ? WHERE id = ?",
+            (json.dumps(record, separators=(",", ":"), ensure_ascii=False), observation_id),
+        )
+    connection.commit()
+    return len(pending)
 
 
 def download_previous_catalog(
@@ -247,6 +332,10 @@ def download_previous_catalog(
         if error.code == 404:
             return None
         raise
+
+    if manifest.get("catalog_data_version") != CATALOG_DATA_VERSION:
+        print("Published catalog data is outdated; a full rebuild is required.", flush=True)
+        return manifest
 
     catalog_url = urllib.parse.urljoin(base_url, manifest["catalog_file"])
     request = urllib.request.Request(
@@ -323,13 +412,15 @@ def build_catalog(
     started_at = utc_now()
     version = os.environ.get("GITHUB_RUN_ID") or started_at.strftime("%Y%m%dT%H%M%SZ")
     index_dir = f"search-{version}"
-    with tempfile.TemporaryDirectory(prefix="fungi-catalog-") as temp_dir:
-        connection = connect_catalog(Path(temp_dir) / "catalog.sqlite")
-        previous_manifest = None
-        if not force_full:
-            previous_manifest = download_previous_catalog(base_url, connection)
+    with tempfile.TemporaryDirectory(prefix="fungi-catalog-") as temp_dir, \
+            closing(connect_catalog(Path(temp_dir) / "catalog.sqlite")) as connection:
+        previous_manifest = download_previous_catalog(base_url, connection)
 
-        full_refresh = force_full or previous_manifest is None
+        full_refresh = (
+            force_full
+            or previous_manifest is None
+            or previous_manifest.get("catalog_data_version") != CATALOG_DATA_VERSION
+        )
         if full_refresh:
             params = {
                 "iconic_taxa": str(FUNGI_ICONIC_TAXON_ID),
@@ -353,6 +444,17 @@ def build_catalog(
             fetch_observations(params, api_url=api_url),
             replace_catalog=full_refresh,
         )
+        sequence_date_day = started_at.date().isoformat()
+        previous_date_requests = (
+            previous_manifest.get("sequence_date_requests", 0)
+            if previous_manifest and previous_manifest.get("sequence_date_day") == sequence_date_day
+            else 0
+        )
+        date_limit = min(
+            SEQUENCE_DATE_BATCH_SIZE,
+            max(0, SEQUENCE_DATE_DAILY_LIMIT - previous_date_requests),
+        )
+        date_requests = backfill_sequence_dates(connection, date_limit)
         catalog_file = "observations.jsonl.gz"
         record_count = write_catalog(
             connection, output_dir / "data" / catalog_file
@@ -363,6 +465,7 @@ def build_catalog(
 
     manifest = {
         "schema_version": 1,
+        "catalog_data_version": CATALOG_DATA_VERSION,
         "catalog_version": version,
         "catalog_file": catalog_file,
         "search_index": f"{index_dir}/index.json.gz",
@@ -372,6 +475,8 @@ def build_catalog(
         "sync_mode": mode,
         "observations_scanned": changed,
         "valid_its_records_seen": accepted,
+        "sequence_date_day": sequence_date_day,
+        "sequence_date_requests": previous_date_requests + date_requests,
         "field_id": ITS_FIELD_ID,
         "taxon_id": FUNGI_ICONIC_TAXON_ID,
     }

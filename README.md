@@ -27,6 +27,21 @@ by URL. The legacy compressed catalog remains available to the workflow for
 incremental updates and to older site versions.
 Each observation card can share a link that opens the explorer filtered to and
 scrolled to that observation.
+Cards link to MycoMap BLAST results when an observation has a MycoMap BLAST
+Results field. The catalog sync stores this field in SQLite and publishes it
+with the observation details; cards do not make separate requests to look it up.
+When the catalog data version changes, the next sync performs a full rebuild
+before publishing, so existing observations receive the new fields. Increment
+`CATALOG_DATA_VERSION` when adding fields that require a full backfill.
+Country codes in match lists are inferred from the observation's location text
+and may be unavailable.
+
+Sequence Uploaded is the date the ITS observation field was created, not
+necessarily when the DNA was sequenced. iNaturalist's bulk API does not expose
+that date, so the sync retrieves up to 200 individual observations per run
+(maximum 4,800 per UTC day), newest IDs first. Existing records will be
+backfilled gradually; dates may initially be unavailable. Stored dates survive
+incremental syncs and full reconciliations when the field value is unchanged.
 
 Run the catalog unit tests with:
 
