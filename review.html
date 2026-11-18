@@ -116,6 +116,14 @@ window.addEventListener("message", event => {
     Number.isFinite(event.data.height)
   ) {
     reviewExplorer.style.height = Math.max(600, event.data.height) + "px";
+  } else if (
+    event.data.type === "review-scroll-to-results" &&
+    Number.isFinite(event.data.offset)
+  ) {
+    window.scrollTo({
+      top: reviewExplorer.getBoundingClientRect().top + window.scrollY + event.data.offset,
+      behavior: "auto"
+    });
   }
 });
 </script>

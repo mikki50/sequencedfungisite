@@ -1221,6 +1221,7 @@ function updateMoreButton(hasMoreApiResults = true) {
   if (reviewMode || catalogMode || globalSequenceResults) {
     document.getElementById("moreButton").style.display = "none";
     renderReviewPagination();
+    notifyReviewHeight();
     return;
   }
   const hasMore = globalSequenceResults
@@ -1250,14 +1251,15 @@ function renderReviewPagination() {
     button.setAttribute("aria-label", ariaLabel);
     if (pageNumber === page) button.setAttribute("aria-current", "page");
     button.disabled = pageNumber === page;
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       page = pageNumber;
       if (indexedCatalog) {
-        refreshIndexedResults();
+        await refreshIndexedResults();
       } else if (catalogMode || reviewMode || globalSequenceResults) {
         renderObservations();
         updateMoreButton();
       }
+      if (page === pageNumber) scrollToResults();
     });
     pagination.appendChild(button);
   }
@@ -1292,6 +1294,27 @@ function renderReviewPagination() {
 function notifyReviewHost(message) {
   if (reviewMode && window.parent !== window) {
     window.parent.postMessage(message, "*");
+  }
+}
+
+function notifyReviewHeight() {
+  if (reviewMode && window.parent !== window) {
+    notifyReviewHost({
+      type: "review-content-height",
+      height: Math.ceil(document.body.getBoundingClientRect().height)
+    });
+  }
+}
+
+function scrollToResults() {
+  const results = document.getElementById("results");
+  if (reviewMode && window.parent !== window) {
+    notifyReviewHost({
+      type: "review-scroll-to-results",
+      offset: results.getBoundingClientRect().top + window.scrollY
+    });
+  } else {
+    results.scrollIntoView({ block: "start" });
   }
 }
 
@@ -2541,7 +2564,7 @@ function renderObservations(indexedResult = null) {
       category: reviewCategory,
       count: reviewResultCount
   });
-  notifyReviewHost({ type: "review-content-height", height: document.documentElement.scrollHeight });
+  notifyReviewHeight();
   return resultCount;
 }
 
@@ -2577,12 +2600,7 @@ window.addEventListener("message", event => {
 });
 
 if (reviewMode && window.parent !== window && "ResizeObserver" in window) {
-  new ResizeObserver(() => {
-    notifyReviewHost({
-      type: "review-content-height",
-      height: document.documentElement.scrollHeight
-    });
-  }).observe(document.body);
+  new ResizeObserver(notifyReviewHeight).observe(document.body);
 }
 
 document.getElementById("filtersForm").addEventListener("submit", event => {
