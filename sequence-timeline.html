@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequence timeline | Sequenced Fungi</title>
+<style>
+  :root { color-scheme: light; font-family: Arial, sans-serif; color: #26332b; background: #f4f5f2; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  header { background: #294b38; color: white; padding: 34px 24px 40px; }
+  .wrap { max-width: 1080px; margin: auto; }
+  .eyebrow { font-size: 12px; font-weight: bold; letter-spacing: .12em; text-transform: uppercase; }
+  header .eyebrow { color: #c5dbc8; }
+  h1 { font-size: clamp(30px, 5vw, 44px); margin: 10px 0; }
+  header p { max-width: 650px; line-height: 1.5; margin: 0; color: #dce8df; }
+  main { padding: 24px; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .stat, .panel, .notice { background: white; border: 1px solid #e0e8e0; border-radius: 12px; }
+  .stat { padding: 18px 20px; }
+  .stat-label { color: #64736a; font-size: 13px; font-weight: bold; }
+  .stat-value { display: block; font-size: 29px; font-weight: bold; margin-top: 8px; color: #294b38; }
+  .notice { margin: 16px 0; padding: 15px 18px; line-height: 1.5; background: #fff9e9; border-color: #efdfb1; color: #674d16; font-size: 14px; }
+  .panel { padding: 22px; margin-top: 16px; }
+  .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 18px; flex-wrap: wrap; }
+  h2 { margin: 0 0 7px; font-size: 21px; }
+  .muted { color: #64736a; font-size: 14px; line-height: 1.5; margin: 0; }
+  .switch { display: flex; flex-wrap: wrap; gap: 5px; background: #edf2ed; border-radius: 8px; padding: 4px; }
+  button { font: inherit; cursor: pointer; }
+  .switch button { border: 0; border-radius: 6px; background: transparent; padding: 8px 11px; color: #365341; font-size: 13px; font-weight: bold; }
+  .switch button[aria-pressed="true"] { background: #294b38; color: white; }
+  button:focus-visible { outline: 3px solid #c99e2a; outline-offset: 2px; }
+  #chart { margin-top: 24px; }
+  #chart svg { display: block; width: 100%; height: auto; }
+  .axis-label { font: 12px Arial, sans-serif; fill: #64736a; }
+  .grid-line { stroke: #e2eae2; }
+  .chart-line { fill: none; stroke: #356d4b; stroke-width: 3; vector-effect: non-scaling-stroke; }
+  .chart-bar { fill: #6a9c77; }
+  .chart-dot { fill: #294b38; }
+  details { margin-top: 18px; }
+  summary { cursor: pointer; color: #356d4b; font-weight: bold; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+  th, td { padding: 10px; text-align: left; border-bottom: 1px solid #e8eee8; }
+  th:not(:first-child), td:not(:first-child) { text-align: right; }
+  #status { margin: 0; padding: 20px; background: white; border-radius: 12px; }
+  #status:empty { display: none; }
+  @media (max-width: 600px) {
+    main { padding: 16px; }
+    .panel { padding: 16px; }
+    .axis-label { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Sequenced fungi explorer</div>
+    <h1>Sequences over time</h1>
+    <p>Explore when ITS barcode fields were added to fungal observations on iNaturalist.</p>
+  </div>
+</header>
+<main class="wrap">
+  <p id="status" role="status" aria-live="polite">Loading the catalog timeline...</p>
+  <div id="dashboard" hidden>
+    <section class="summary" aria-label="Catalog summary">
+      <div class="stat"><span class="stat-label">Observations in catalog</span><strong id="total" class="stat-value"></strong></div>
+      <div class="stat"><span class="stat-label">With an upload date</span><strong id="dated" class="stat-value"></strong></div>
+      <div class="stat"><span class="stat-label">Without an upload date</span><strong id="undated" class="stat-value"></strong></div>
+    </section>
+    <p class="notice"><strong>Dates are incomplete.</strong> Upload dates are being collected gradually, newest observations first. The timeline shows only records with known dates and will change as more are collected. Counts are observations, not distinct species or unique sequences.</p>
+    <section class="panel" aria-labelledby="chartTitle">
+      <div class="panel-heading">
+        <div>
+          <h2 id="chartTitle">Known uploads over time</h2>
+          <p class="muted">Date the ITS field was added to iNaturalist, not necessarily when sequencing happened. Dates are grouped by UTC month.</p>
+        </div>
+        <div class="switch" role="group" aria-label="Chart display">
+          <button type="button" id="cumulative" aria-pressed="true">Cumulative</button>
+          <button type="button" id="monthly" aria-pressed="false">By month</button>
+        </div>
+      </div>
+      <div id="chart"></div>
+      <p id="empty" class="muted" hidden>No sequence upload dates are available yet.</p>
+      <details id="dataDetails">
+        <summary>View monthly data</summary>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Month (UTC)</th><th scope="col">Uploads</th><th scope="col">Cumulative</th></tr></thead>
+            <tbody id="dataRows"></tbody>
+          </table>
+        </div>
+      </details>
+      <p id="updated" class="muted"></p>
+    </section>
+  </div>
+</main>
+<script>
+"use strict";
+
+const formatNumber = new Intl.NumberFormat();
+let months = [];
+let mode = "cumulative";
+
+function monthLabel(value) {
+  const [year, month] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("en", { month: "short", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(year, month - 1, 1)));
+}
+
+function fillMonths(entries) {
+  if (!entries.length) return [];
+  const counts = new Map(entries);
+  const [startYear, startMonth] = entries[0][0].split("-").map(Number);
+  const [endYear, endMonth] = entries[entries.length - 1][0].split("-").map(Number);
+  const result = [];
+  let running = 0;
+  for (let n = startYear * 12 + startMonth - 1; n <= endYear * 12 + endMonth - 1; n++) {
+    const key = Math.floor(n / 12) + "-" + String(n % 12 + 1).padStart(2, "0");
+    const count = counts.get(key) || 0;
+    running += count;
+    result.push({ month: key, count, cumulative: running });
+  }
+  return result;
+}
+
+function renderChart() {
+  document.getElementById("cumulative").setAttribute("aria-pressed", String(mode === "cumulative"));
+  document.getElementById("monthly").setAttribute("aria-pressed", String(mode === "monthly"));
+  if (!months.length) return;
+
+  const width = 900, height = 300, left = 65, right = 18, top = 20, bottom = 52;
+  const plotWidth = width - left - right, plotHeight = height - top - bottom;
+  const values = months.map(item => mode === "cumulative" ? item.cumulative : item.count);
+  const maximum = Math.ceil(Math.max(...values) / 4) * 4;
+  const x = index => left + (months.length === 1 ? plotWidth / 2 : index * plotWidth / (months.length - 1));
+  const y = value => top + plotHeight * (1 - value / maximum);
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", mode === "cumulative"
+    ? "Cumulative known sequence uploads by month. Exact values are in the table below."
+    : "Known sequence uploads per month. Exact values are in the table below.");
+  function element(tag, attributes, text) {
+    const node = document.createElementNS(svgNS, tag);
+    Object.entries(attributes).forEach(([name, value]) => node.setAttribute(name, value));
+    if (text !== undefined) node.textContent = text;
+    svg.appendChild(node);
+  }
+  for (let i = 0; i <= 4; i++) {
+    const value = maximum * i / 4;
+    const position = y(value);
+    element("line", { x1: left, x2: width - right, y1: position, y2: position, class: "grid-line" });
+    element("text", { x: left - 10, y: position + 4, "text-anchor": "end", class: "axis-label" }, formatNumber.format(Math.round(value)));
+  }
+  const labelIndices = new Set([0, months.length - 1]);
+  for (let i = 1; i < Math.min(5, months.length - 1); i++) {
+    labelIndices.add(Math.round(i * (months.length - 1) / 5));
+  }
+  [...labelIndices].sort((a, b) => a - b).forEach(index => {
+    element("text", { x: x(index), y: height - 19, "text-anchor": index === 0 ? "start" : index === months.length - 1 ? "end" : "middle", class: "axis-label" }, monthLabel(months[index].month));
+  });
+  if (mode === "cumulative") {
+    element("polyline", { points: values.map((value, index) => `${x(index)},${y(value)}`).join(" "), class: "chart-line" });
+    if (months.length === 1) element("circle", { cx: x(0), cy: y(values[0]), r: 4, class: "chart-dot" });
+  } else {
+    const barWidth = Math.min(28, plotWidth / Math.max(months.length, 1) * .75);
+    values.forEach((value, index) => {
+      element("rect", { x: x(index) - barWidth / 2, y: y(value), width: barWidth, height: top + plotHeight - y(value), class: "chart-bar" });
+    });
+  }
+  document.getElementById("chart").replaceChildren(svg);
+}
+
+async function loadTimeline() {
+  const status = document.getElementById("status");
+  try {
+    if (typeof DecompressionStream === "undefined") throw new Error("This browser cannot read the compressed catalog.");
+    const base = new URL("data/", window.location.href);
+    const manifestResponse = await fetch(new URL("manifest.json", base), { cache: "no-cache" });
+    if (!manifestResponse.ok) throw new Error("Could not load catalog manifest (HTTP " + manifestResponse.status + ").");
+    const manifest = await manifestResponse.json();
+    if (!manifest.sequence_timeline) throw new Error("The published catalog does not have a timeline yet. It will be available after the next catalog deployment.");
+    const response = await fetch(new URL(manifest.sequence_timeline, base));
+    if (!response.ok || !response.body) throw new Error("Could not load timeline data (HTTP " + response.status + ").");
+    const data = await new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json();
+    if (data.schema !== 1 || !Number.isInteger(data.total) || !Number.isInteger(data.dated) ||
+        data.total < 0 || data.dated < 0 || data.dated > data.total || !Array.isArray(data.months) ||
+        data.months.some((entry, index) => !Array.isArray(entry) || entry.length !== 2 ||
+          !/^\d{4}-(0[1-9]|1[0-2])$/.test(entry[0]) || !Number.isInteger(entry[1]) || entry[1] <= 0 ||
+          (index > 0 && entry[0] <= data.months[index - 1][0])) ||
+        data.months.reduce((sum, entry) => sum + entry[1], 0) !== data.dated ||
+        data.total !== Number(manifest.records)) {
+      throw new Error("The timeline data does not match the catalog.");
+    }
+    months = fillMonths(data.months);
+    document.getElementById("total").textContent = formatNumber.format(data.total);
+    document.getElementById("dated").textContent = formatNumber.format(data.dated);
+    document.getElementById("undated").textContent = formatNumber.format(data.total - data.dated);
+    document.getElementById("empty").hidden = months.length > 0;
+    document.getElementById("dataDetails").hidden = months.length === 0;
+    const rows = document.getElementById("dataRows");
+    months.forEach(item => {
+      const row = document.createElement("tr");
+      [monthLabel(item.month), formatNumber.format(item.count), formatNumber.format(item.cumulative)].forEach(value => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      });
+      rows.appendChild(row);
+    });
+    document.getElementById("updated").textContent = "Catalog generated: " + (manifest.generated_at || "unknown");
+    document.getElementById("dashboard").hidden = false;
+    status.textContent = "";
+    renderChart();
+  } catch (error) {
+    console.error("Could not load sequence timeline.", error);
+    status.textContent = "Unable to load the timeline: " + error.message;
+    status.setAttribute("role", "alert");
+  }
+}
+
+document.getElementById("cumulative").addEventListener("click", () => { mode = "cumulative"; renderChart(); });
+document.getElementById("monthly").addEventListener("click", () => { mode = "monthly"; renderChart(); });
+loadTimeline();
+</script>
+</body>
+</html>

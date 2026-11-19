@@ -252,6 +252,33 @@ class CatalogSyncTests(unittest.TestCase):
 
 
 class SearchIndexTests(unittest.TestCase):
+    def test_timeline_counts_dated_observations_by_month(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            sequence = "ACGT" * 30
+            records = [
+                {"id": 1, "sequence_uploaded_at": "2025-02-01T00:00:00Z"},
+                {"id": 2, "sequence_uploaded_at": "2025-03-01T00:30:00+02:00"},
+                {"id": 3, "sequence_uploaded_at": "2025-04-03T00:00:00Z"},
+                {"id": 4, "sequence_uploaded_at": None},
+                {"id": 5},
+            ]
+            for record in records:
+                record["ofvs"] = [{"field_id": 2330, "value": sequence}]
+            connection.executemany(
+                "INSERT INTO observations (id,payload) VALUES (?,?)",
+                [(record["id"], json.dumps(record)) for record in records],
+            )
+            build_search_index(connection, root / "search")
+            with gzip.open(root / "search" / "sequence-timeline.json.gz", "rt", encoding="utf-8") as file:
+                timeline = json.load(file)
+            self.assertEqual(timeline, {
+                "schema": 1, "total": 5, "dated": 3,
+                "months": [["2025-02", 2], ["2025-04", 1]],
+            })
+            connection.close()
+
     def test_match_flags_and_sequence_lookup_use_full_catalog(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

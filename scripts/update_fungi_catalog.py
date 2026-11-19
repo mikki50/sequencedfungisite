@@ -469,6 +469,7 @@ def build_catalog(
         "catalog_version": version,
         "catalog_file": catalog_file,
         "search_index": f"{index_dir}/index.json.gz",
+        "sequence_timeline": f"{index_dir}/sequence-timeline.json.gz",
         "records": record_count,
         "generated_at": timestamp(utc_now()),
         "last_successful_sync": timestamp(started_at),

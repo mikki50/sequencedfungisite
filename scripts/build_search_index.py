@@ -1,5 +1,6 @@
 """Build a compact browser search index and on-demand observation shards."""
 
+import datetime as dt
 import gzip
 import hashlib
 import json
@@ -41,9 +42,20 @@ def build_search_index(connection: sqlite3.Connection, output_dir: Path):
     groups = {}
     rows = []
     details = []
+    sequence_months = {}
     hashes = [{} for _ in range(256)]
     for (payload,) in connection.execute("SELECT payload FROM observations ORDER BY id"):
         record = json.loads(payload)
+        uploaded_at = record.get("sequence_uploaded_at")
+        if uploaded_at:
+            try:
+                date = dt.datetime.fromisoformat(uploaded_at.replace("Z", "+00:00"))
+                if date.tzinfo is None:
+                    raise ValueError("Missing timezone")
+                month = date.astimezone(dt.timezone.utc).strftime("%Y-%m")
+            except (AttributeError, TypeError, ValueError) as error:
+                raise ValueError(f"Invalid sequence upload date for observation {record['id']}") from error
+            sequence_months[month] = sequence_months.get(month, 0) + 1
         sequence = next(
             (field["value"] for field in record.get("ofvs", [])
              if str(field.get("field_id")) == "2330"),
@@ -113,5 +125,11 @@ def build_search_index(connection: sqlite3.Connection, output_dir: Path):
         "schema": 1, "detailSize": DETAIL_SIZE, "rows": rows,
         "groupCounts": counts,
         **{name: table["values"] for name, table in tables.items()},
+    })
+    write_gzip(output_dir / "sequence-timeline.json.gz", {
+        "schema": 1,
+        "total": len(rows),
+        "dated": sum(sequence_months.values()),
+        "months": sorted(sequence_months.items()),
     })
     return len(rows)
