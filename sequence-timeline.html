@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sequence timeline | Sequenced Fungi</title>
+<script>if (window.parent !== window) document.documentElement.classList.add("embedded-view");</script>
 <style>
   :root { color-scheme: light; font-family: Arial, sans-serif; color: #26332b; background: #f4f5f2; }
   * { box-sizing: border-box; }
@@ -14,6 +15,13 @@
   header .eyebrow { color: #c5dbc8; }
   h1 { font-size: clamp(30px, 5vw, 44px); margin: 10px 0; }
   header p { max-width: 650px; line-height: 1.5; margin: 0; color: #dce8df; }
+  .embedded-view header { background: transparent; padding: 0 24px; }
+  .embedded-view header .eyebrow { display: none; }
+  .embedded-view header h1 {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .embedded-view header p { color: #596c60; }
   main { padding: 24px; }
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
   .stat, .panel, .notice { background: white; border: 1px solid #e0e8e0; border-radius: 12px; }
@@ -46,6 +54,7 @@
   #status { margin: 0; padding: 20px; background: white; border-radius: 12px; }
   #status:empty { display: none; }
   @media (max-width: 600px) {
+    .embedded-view header { padding: 0 16px; }
     main { padding: 16px; }
     .panel { padding: 16px; }
     .axis-label { font-size: 11px; }

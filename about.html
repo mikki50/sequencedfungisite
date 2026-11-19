@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>About | iNaturalist Sequenced Fungi Explorer</title>
+<script>if (window.parent !== window) document.documentElement.classList.add("embedded-view");</script>
 <style>
   body {
     margin: 0;
@@ -20,6 +21,18 @@
   header p { margin: 0; opacity: .8; }
   header nav { margin-top: 12px; }
   header nav a { color: white; }
+  .embedded-view header {
+    max-width: 850px;
+    margin: auto;
+    padding: 0 24px;
+    background: transparent;
+    color: #596c60;
+  }
+  .embedded-view header h1 {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .embedded-view header > p:first-of-type, .embedded-view header nav { display: none; }
   main { max-width: 850px; margin: auto; padding: 24px; }
   section {
     background: white;
@@ -36,11 +49,6 @@
   <h1>About this project</h1>
   <p>iNaturalist Sequenced Fungi Explorer</p>
   <nav><a href="./" target="_top">Back to the fungi explorer</a></nav>
-  <br>
-  <br>
-  <p>
-    For any inquiries or feedback regarding this project, please reach out to kim.h.inbox@gmail.com.
-  </p>
 </header>
 
 <main>
@@ -50,6 +58,19 @@
       iNaturalist's built-in filters aren't well suited to finding and exploring
       fungal observations with DNA barcode data. This site exists to make those
       observations easier to discover and review.
+    </p>
+    <p>
+      It also helps visualise data for
+      <a href="https://www.mycause.com.au/page/395975/support-new-fungi-research-in-australia" target="_blank" rel="noopener noreferrer">Support New Fungi Research in Australia</a>,
+      where you can donate to the research.
+    </p>
+  </section>
+  <section>
+    <h3>About the site</h3>
+    <p>Created by Mikki50.</p>
+    <p>
+      For questions or improvement recommendations, contact
+      <a href="mailto:kim.h.inbox@gmail.com">kim.h.inbox@gmail.com</a>.
     </p>
   </section>
 </main>

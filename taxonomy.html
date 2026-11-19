@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fungal taxonomy | Sequenced Fungi</title>
+<script>if (window.parent !== window) document.documentElement.classList.add("embedded-view");</script>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f2; color: #26332b; }
@@ -12,6 +13,13 @@
   .eyebrow { color: #c5dbc8; font-size: 12px; font-weight: bold; letter-spacing: .12em; text-transform: uppercase; }
   h1 { margin: 10px 0; font-size: clamp(30px, 5vw, 42px); }
   header p { color: #dce8df; line-height: 1.5; margin: 0; }
+  .embedded-view header { background: transparent; padding: 0 24px; }
+  .embedded-view header .eyebrow { display: none; }
+  .embedded-view header h1 {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .embedded-view header p { color: #596c60; }
   main { padding: 24px; }
   .panel { background: white; border: 1px solid #e0e8e0; border-radius: 12px; padding: 22px; }
   .intro { color: #596c60; line-height: 1.5; margin: 0 0 16px; }
@@ -33,6 +41,7 @@
   .actions a { color: #356d4b; font-weight: bold; }
   #status { margin: 0; }
   @media (max-width: 600px) {
+    .embedded-view header { padding: 0 16px; }
     main { padding: 16px; }
     .panel { padding: 16px; }
     .tree ul { margin-left: 4px; padding-left: 9px; }

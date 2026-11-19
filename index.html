@@ -13,40 +13,37 @@
     color: #26332b;
   }
   header {
-    position: relative;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 24px;
     background: #294b38;
     color: white;
-    padding: 22px 30px;
+    padding: 10px 24px;
   }
   .review-mode header { display: none; }
   .review-mode main { max-width: none; padding: 16px 24px; }
-  header h1 { margin: 0 0 6px; }
-  header p { margin: 0; opacity: .8; }
-  .site-navigation {
-    margin-top: 16px;
-    padding-top: 12px;
-    border-top: 1px solid #ffffff33;
-  }
+  header h1 { margin: 0; font-size: 17px; }
   .site-navigation {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 0 20px;
+    margin-left: auto;
   }
   .site-navigation a {
     display: inline-flex;
     align-items: center;
-    padding: 9px 14px;
-    border: 1px solid #d9e1d8;
-    border-radius: 7px;
+    padding: 10px 0 8px;
+    border-bottom: 3px solid transparent;
     color: white;
     font-size: 14px;
-    font-weight: 700;
     text-decoration: none;
   }
   .site-navigation a:hover, .site-navigation a[aria-current="page"] {
-    background: #f1f4ee;
-    color: #294b38;
+    border-bottom-color: #d3e2d4;
   }
+  .site-navigation a[aria-current="page"] { font-weight: 700; }
+  .site-navigation a:focus-visible { outline: 2px solid white; outline-offset: 3px; }
   .review-categories { margin-bottom: 20px; }
   .review-categories h2 { margin: 0 0 8px; font-size: 18px; }
   .review-categories p { margin: 0 0 12px; color: #59645c; font-size: 14px; }
@@ -61,8 +58,9 @@
   .review-buttons button[aria-pressed="true"] { background: #294b38; color: white; }
   #siteViewFrame { display: block; width: 100%; min-height: 400px; border: 0; }
   [hidden] { display: none !important; }
-  @media (max-width: 520px) {
-    header { padding: 54px 20px 20px; }
+  @media (max-width: 680px) {
+    header { padding: 12px 16px 4px; }
+    .site-navigation { width: 100%; margin-left: 0; }
   }
   main { max-width: 1250px; margin: auto; padding: 24px; }
   .controls {
@@ -314,7 +312,6 @@
 
 <header>
   <h1>🍄 iNaturalist Sequenced Fungi Explorer</h1>
-  <p>Explore fungal observations with DNA barcode records</p>
   <nav class="site-navigation" aria-label="Site navigation">
     <a href="#explore" data-view="explore" aria-current="page">Explore and review</a>
     <a href="#taxonomy" data-view="taxonomy">Taxonomy tree</a>
@@ -336,8 +333,8 @@
     </div>
   </section>
   <form id="filtersForm">
-  <details id="reviewFilters" class="review-filter-disclosure" open>
-    <summary>Filters</summary>
+  <details id="reviewFilters" class="review-filter-disclosure">
+    <summary>Show filters</summary>
   <div class="controls">
     <div class="filter-control taxon-control">
       <label for="search"><span>Species or higher taxon</span></label>
@@ -470,9 +467,7 @@ if (legacyReviewMode) {
 const reviewFilters = document.getElementById("reviewFilters");
 const reviewFiltersSummary = reviewFilters.querySelector("summary");
 reviewFilters.addEventListener("toggle", () => {
-  reviewFiltersSummary.textContent = reviewMode
-    ? (reviewFilters.open ? "Hide filters" : "Show filters")
-    : "Filters";
+  reviewFiltersSummary.textContent = reviewFilters.open ? "Hide filters" : "Show filters";
 });
 
 function updateReviewControls() {
@@ -481,9 +476,7 @@ function updateReviewControls() {
       reviewMode ? button.dataset.reviewCategory === reviewCategory : !button.dataset.reviewCategory
     ));
   });
-  reviewFiltersSummary.textContent = reviewMode
-    ? (reviewFilters.open ? "Hide filters" : "Show filters")
-    : "Filters";
+  reviewFiltersSummary.textContent = reviewFilters.open ? "Hide filters" : "Show filters";
 }
 
 function fetchApi(url) {
@@ -2703,7 +2696,6 @@ document.querySelectorAll("[data-view]").forEach(link => {
     showSiteView(view);
     window.scrollTo({ top: 0, behavior: "auto" });
     if (view === "explore" && wasReview) {
-      reviewFilters.open = true;
       updateReviewControls();
       searchHasBeenSubmitted = true;
       loadObservations();
@@ -2721,7 +2713,6 @@ document.querySelectorAll("[data-review-category]").forEach(button => {
     if (!reviewMode && !category) return;
     reviewMode = Boolean(category);
     if (category) reviewCategory = category;
-    reviewFilters.open = !reviewMode;
     updateReviewControls();
     const url = new URL(window.location.href);
     url.search = buildPageStateParams().toString();
@@ -2741,9 +2732,7 @@ document.getElementById("filtersForm").addEventListener("submit", event => {
 
 window.addEventListener("popstate", () => {
   const view = currentView();
-  const wasReview = reviewMode;
   reviewMode = legacyReviewMode || view === "review";
-  if (reviewMode !== wasReview) reviewFilters.open = !reviewMode;
   showSiteView(view);
   restoreSearchFromUrl();
   if (view === "explore" || view === "review") {
@@ -2840,7 +2829,6 @@ document.addEventListener("click", event => {
   }
 });
 
-if (reviewMode) reviewFilters.open = false;
 showSiteView(currentView());
 restoreSearchFromUrl();
 const sharedObservationIdParam = initialPageParams.get("observation_id");
