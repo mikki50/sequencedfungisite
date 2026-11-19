@@ -19,6 +19,7 @@ from scripts.update_fungi_catalog import (
     write_catalog,
 )
 from scripts.build_search_index import build_search_index
+from scripts.build_taxonomy import build_taxonomy
 
 
 class NormalizeSequenceTests(unittest.TestCase):
@@ -148,7 +149,8 @@ class CatalogSyncTests(unittest.TestCase):
 
                 with patch("scripts.update_fungi_catalog.download_previous_catalog", side_effect=load_previous), \
                      patch("scripts.update_fungi_catalog.fetch_observations", return_value=iter([record])) as fetch, \
-                     patch("scripts.update_fungi_catalog.backfill_sequence_dates", return_value=0):
+                     patch("scripts.update_fungi_catalog.backfill_sequence_dates", return_value=0), \
+                     patch("scripts.update_fungi_catalog.build_taxonomy"):
                     result = build_catalog(Path(temp_dir), base_url="https://example.org/data", force_full=False)
 
                 self.assertEqual(result["sync_mode"], expected_mode)
@@ -245,10 +247,78 @@ class CatalogSyncTests(unittest.TestCase):
              patch("scripts.update_fungi_catalog.utc_now", return_value=now), \
              patch("scripts.update_fungi_catalog.download_previous_catalog", return_value=manifest), \
              patch("scripts.update_fungi_catalog.fetch_observations", return_value=iter([])), \
-             patch("scripts.update_fungi_catalog.backfill_sequence_dates", return_value=50) as backfill:
+             patch("scripts.update_fungi_catalog.backfill_sequence_dates", return_value=50) as backfill, \
+             patch("scripts.update_fungi_catalog.build_taxonomy"):
             result = build_catalog(Path(temp_dir), base_url="https://example.org/data", force_full=False)
         self.assertEqual(backfill.call_args.args[1], 50)
         self.assertEqual(result["sequence_date_requests"], 4800)
+
+
+class TaxonomyTests(unittest.TestCase):
+    def test_builds_tree_counts_and_reports_unplaced(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            observations = [
+                {"id": 1, "taxon": {"id": 3, "ancestor_ids": [47170, 2, 3]}},
+                {"id": 2, "taxon": {"id": 2, "ancestor_ids": [47170, 2]}},
+                {"id": 3, "taxon": None},
+            ]
+            connection.executemany("INSERT INTO observations VALUES (?, ?)",
+                                   [(item["id"], json.dumps(item)) for item in observations])
+            taxa = [
+                {"id": 47170, "name": "Fungi", "rank": "kingdom", "ancestor_ids": []},
+                {"id": 2, "name": "Genus", "rank": "genus", "ancestor_ids": [47170]},
+                {"id": 3, "name": "Genus species", "rank": "species", "ancestor_ids": [47170, 2]},
+            ]
+            with patch("scripts.build_taxonomy.TAXA_BATCH_SIZE", 200):
+                build_taxonomy(connection, root, lambda url, **kwargs: {"results": taxa})
+            with gzip.open(root / "taxonomy.json.gz", "rt", encoding="utf-8") as file:
+                result = json.load(file)
+            nodes = {item["id"]: item for item in result["nodes"]}
+            self.assertEqual((result["total"], result["unplaced"]), (3, 1))
+            self.assertEqual((nodes[47170]["count"], nodes[2]["count"], nodes[3]["count"]), (2, 2, 1))
+            self.assertEqual((nodes[2]["direct"], nodes[3]["direct"]), (1, 1))
+            self.assertEqual(nodes[3]["parent"], 2)
+            connection.close()
+
+    def test_missing_taxon_is_labelled_and_uses_recorded_ancestry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            record = {"id": 1, "taxon": {"id": 99, "ancestor_ids": [47170, 99]}}
+            connection.execute("INSERT INTO observations VALUES (?, ?)", (1, json.dumps(record)))
+            response = {"results": [
+                {"id": 47170, "name": "Fungi", "rank": "kingdom", "ancestor_ids": []},
+            ]}
+            build_taxonomy(connection, root, lambda url, **kwargs: response)
+            with gzip.open(root / "taxonomy.json.gz", "rt", encoding="utf-8") as file:
+                data = json.load(file)
+            node = next(item for item in data["nodes"] if item["id"] == 99)
+            self.assertEqual((node["name"], node["parent"], node["count"]), ("Unknown taxon #99", 47170, 1))
+            self.assertEqual(data["missing_taxa"], 1)
+            connection.close()
+
+    def test_reuses_previously_published_taxon_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            record = {"id": 1, "taxon": {"id": 2, "ancestor_ids": [47170, 2]}}
+            connection.execute("INSERT INTO observations VALUES (?, ?)", (1, json.dumps(record)))
+            previous = root / "previous.json.gz"
+            with gzip.open(previous, "wt", encoding="utf-8") as file:
+                json.dump({"schema": 1, "taxa": [
+                    {"id": 47170, "name": "Fungi", "rank": "kingdom", "ancestor_ids": []},
+                    {"id": 2, "name": "Genus", "rank": "genus", "ancestor_ids": [47170]},
+                ]}, file)
+            with patch("scripts.build_taxonomy.urllib.request.urlopen", return_value=previous.open("rb")):
+                with patch("scripts.build_taxonomy.urllib.parse.urlencode", side_effect=AssertionError("unexpected API call")):
+                    build_taxonomy(connection, root, lambda url, **kwargs: None, "https://example.org/taxonomy.gz")
+            with gzip.open(root / "taxonomy.json.gz", "rt", encoding="utf-8") as file:
+                data = json.load(file)
+            self.assertEqual(len(data["nodes"]), 2)
+            self.assertEqual(data["missing_taxa"], 0)
+            connection.close()
 
 
 class SearchIndexTests(unittest.TestCase):

@@ -2719,6 +2719,9 @@ if (sharedObservationIdParam !== null) {
   }
 } else if (reviewMode) {
   loadObservations();
+} else if (initialPageParams.get("from_taxonomy") === "1" && selectedTaxonId) {
+  searchHasBeenSubmitted = true;
+  loadObservations();
 }
 </script>
 </body>

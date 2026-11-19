@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fungal taxonomy | Sequenced Fungi</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f2; color: #26332b; }
+  header { background: #294b38; color: white; padding: 32px 24px; }
+  .wrap { max-width: 1000px; margin: auto; }
+  .eyebrow { color: #c5dbc8; font-size: 12px; font-weight: bold; letter-spacing: .12em; text-transform: uppercase; }
+  h1 { margin: 10px 0; font-size: clamp(30px, 5vw, 42px); }
+  header p { color: #dce8df; line-height: 1.5; margin: 0; }
+  main { padding: 24px; }
+  .panel { background: white; border: 1px solid #e0e8e0; border-radius: 12px; padding: 22px; }
+  .intro { color: #596c60; line-height: 1.5; margin: 0 0 16px; }
+  label { display: block; font-size: 13px; font-weight: bold; margin-bottom: 7px; }
+  input { font: inherit; padding: 11px 12px; width: min(100%, 430px); border: 1px solid #b9c9bc; border-radius: 7px; }
+  input:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #c99e2a; outline-offset: 2px; }
+  .stats { margin: 14px 0; color: #596c60; font-size: 14px; line-height: 1.5; }
+  .warning { padding: 12px 14px; background: #fff9e9; color: #674d16; border-radius: 7px; font-size: 14px; line-height: 1.5; }
+  .tree, .tree ul { margin: 0; padding: 0; list-style: none; }
+  .tree ul { margin-left: 12px; padding-left: 16px; border-left: 1px solid #d5e1d7; }
+  .tree li { margin: 5px 0; }
+  summary, .leaf { padding: 9px 10px; border-radius: 7px; background: #f3f7f3; line-height: 1.5; }
+  summary { cursor: pointer; }
+  summary:hover { background: #e7f0e8; }
+  .name { font-weight: bold; color: #294b38; overflow-wrap: anywhere; }
+  .rank { color: #5e7564; font-size: 12px; margin-left: 8px; }
+  .count { color: #52635a; font-size: 13px; margin-left: 8px; white-space: nowrap; }
+  .actions { margin: 6px 0 8px 26px; font-size: 13px; color: #596c60; }
+  .actions a { color: #356d4b; font-weight: bold; }
+  #status { margin: 0; }
+  @media (max-width: 600px) {
+    main { padding: 16px; }
+    .panel { padding: 16px; }
+    .tree ul { margin-left: 4px; padding-left: 9px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Sequenced fungi explorer</div>
+    <h1>Explore the fungal tree</h1>
+    <p>Browse taxa represented by ITS barcode observations, from families to genera and species.</p>
+  </div>
+</header>
+<main class="wrap">
+  <section class="panel" aria-label="Fungal taxonomy">
+    <p class="intro">Expand a branch to explore it, or search for a taxon. Counts include sequenced observations in that taxon and its descendants; they are not counts of species or unique sequences.</p>
+    <label for="taxonSearch">Search the tree</label>
+    <input id="taxonSearch" type="search" placeholder="Search a family, genus or species" autocomplete="off">
+    <p id="status" class="stats" role="status" aria-live="polite">Loading taxonomy...</p>
+    <p id="warning" class="warning" hidden></p>
+    <ul id="tree" class="tree"></ul>
+  </section>
+</main>
+<script>
+"use strict";
+
+const tree = document.getElementById("tree");
+const search = document.getElementById("taxonSearch");
+const status = document.getElementById("status");
+const formatNumber = new Intl.NumberFormat();
+let nodes = new Map();
+let children = new Map();
+let summary = null;
+let searchTimer;
+
+function nodeLabel(element, item) {
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = item.name;
+  const rank = document.createElement("span");
+  rank.className = "rank";
+  rank.textContent = item.rank;
+  const count = document.createElement("span");
+  count.className = "count";
+  count.textContent = formatNumber.format(item.count) + " observations";
+  element.append(name, rank, count);
+}
+
+function renderNode(id, visible, expand) {
+  const item = nodes.get(id);
+  const descendants = (children.get(id) || []).filter(child => !visible || visible.has(child));
+  const li = document.createElement("li");
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const link = document.createElement("a");
+  const params = new URLSearchParams({
+    inat_search: item.name, inat_taxon_id: String(item.id), from_taxonomy: "1"
+  });
+  link.href = "index.html?" + params;
+  link.textContent = "View observations";
+  actions.append(link);
+  if (item.direct) actions.append(" · " + formatNumber.format(item.direct) + " identified directly as this taxon");
+  if (!descendants.length) {
+    const leaf = document.createElement("div");
+    leaf.className = "leaf";
+    nodeLabel(leaf, item);
+    li.append(leaf, actions);
+    return li;
+  }
+  const details = document.createElement("details");
+  const heading = document.createElement("summary");
+  nodeLabel(heading, item);
+  details.append(heading);
+  let built = false;
+  function buildChildren() {
+    if (built) return;
+    built = true;
+    const list = document.createElement("ul");
+    descendants.forEach(child => list.appendChild(renderNode(child, visible, expand)));
+    details.append(actions, list);
+  }
+  details.addEventListener("toggle", () => { if (details.open) buildChildren(); });
+  if (expand) {
+    buildChildren();
+    details.open = true;
+  }
+  li.appendChild(details);
+  return li;
+}
+
+function renderTree() {
+  const query = search.value.trim().toLowerCase();
+  let visible = null;
+  let matches = 0;
+  if (query) {
+    visible = new Set();
+    nodes.forEach(item => {
+      if (!item.name.toLowerCase().includes(query)) return;
+      matches++;
+      let current = item;
+      while (current && !visible.has(current.id)) {
+        visible.add(current.id);
+        current = nodes.get(current.parent);
+      }
+    });
+  }
+  tree.replaceChildren();
+  if (nodes.has(47170) && (!visible || visible.has(47170))) {
+    tree.appendChild(renderNode(47170, visible, Boolean(query)));
+    const root = tree.querySelector("details");
+    if (!query && root) root.open = true;
+  }
+  status.textContent = query
+    ? formatNumber.format(matches) + " matching taxa"
+    : formatNumber.format(nodes.size) + " taxa · " + formatNumber.format(summary.total) + " catalog observations";
+  if (query && !matches) status.textContent += ". Try another name.";
+}
+
+async function loadTaxonomy() {
+  try {
+    if (typeof DecompressionStream === "undefined") throw new Error("This browser cannot read the compressed catalog.");
+    const base = new URL("data/", window.location.href);
+    const manifestResponse = await fetch(new URL("manifest.json", base), { cache: "no-cache" });
+    if (!manifestResponse.ok) throw new Error("Could not load catalog manifest (HTTP " + manifestResponse.status + ").");
+    const manifest = await manifestResponse.json();
+    if (!manifest.taxonomy) throw new Error("The taxonomy tree will be available after the next catalog deployment.");
+    const response = await fetch(new URL(manifest.taxonomy, base));
+    if (!response.ok || !response.body) throw new Error("Could not load taxonomy data (HTTP " + response.status + ").");
+    const data = await new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json();
+    if (data.schema !== 1 || !Array.isArray(data.nodes) ||
+        !Number.isInteger(data.total) || !Number.isInteger(data.unplaced) ||
+        !Number.isInteger(data.missing_taxa) || data.total !== Number(manifest.records) ||
+        data.unplaced < 0 || data.unplaced > data.total || data.missing_taxa < 0) {
+      throw new Error("The taxonomy data does not match the catalog.");
+    }
+    nodes = new Map();
+    children = new Map();
+    data.nodes.forEach(item => {
+      if (!Number.isSafeInteger(item.id) || item.id <= 0 || nodes.has(item.id) ||
+          typeof item.name !== "string" || typeof item.rank !== "string" ||
+          !Number.isInteger(item.count) || item.count <= 0 ||
+          !Number.isInteger(item.direct) || item.direct < 0 || item.direct > item.count) {
+        throw new Error("Invalid taxonomy node.");
+      }
+      nodes.set(item.id, item);
+    });
+    if ((data.total > data.unplaced && !nodes.has(47170)) ||
+        (nodes.has(47170) && (nodes.get(47170).parent !== null ||
+         nodes.get(47170).count !== data.total - data.unplaced))) {
+      throw new Error("Invalid fungal root in taxonomy data.");
+    }
+    nodes.forEach(item => {
+      if (item.id === 47170) return;
+      if (!nodes.has(item.parent)) throw new Error("A taxonomy parent is missing.");
+      if (!children.has(item.parent)) children.set(item.parent, []);
+      children.get(item.parent).push(item.id);
+    });
+    children.forEach(ids => ids.sort((a, b) => nodes.get(a).name.localeCompare(nodes.get(b).name)));
+    summary = data;
+    const warnings = [];
+    if (data.unplaced) warnings.push(formatNumber.format(data.unplaced) + " observations could not be placed in the tree.");
+    if (data.missing_taxa) warnings.push(formatNumber.format(data.missing_taxa) + " taxon names could not be retrieved; unknown taxa are labelled by ID.");
+    if (warnings.length) {
+      document.getElementById("warning").textContent = warnings.join(" ");
+      document.getElementById("warning").hidden = false;
+    }
+    renderTree();
+  } catch (error) {
+    console.error("Could not load taxonomy.", error);
+    status.textContent = "Unable to load taxonomy: " + error.message;
+    status.setAttribute("role", "alert");
+  }
+}
+
+search.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { if (summary) renderTree(); }, 200);
+});
+loadTaxonomy();
+</script>
+</body>
+</html>
