@@ -1351,14 +1351,7 @@ function setReviewCategory(category) {
   updateReviewControls();
   page = 1;
   saveSearchToHistory();
-  if (indexedCatalog) {
-    indexedGlobalGroup = null;
-    globalSequenceResults = false;
-    refreshIndexedResults();
-  } else {
-    reviewResultCount = renderObservations();
-    updateMoreButton();
-  }
+  loadObservations();
   notifyReviewHost({ type: "review-category-changed", category });
 }
 
@@ -2707,10 +2700,19 @@ document.querySelectorAll("[data-review-category]").forEach(button => {
   button.addEventListener("click", () => {
     const category = button.dataset.reviewCategory;
     if (reviewMode && category) {
-      setReviewCategory(category);
+      if (category === reviewCategory) {
+        searchHasBeenSubmitted = true;
+        loadObservations();
+      } else {
+        setReviewCategory(category);
+      }
       return;
     }
-    if (!reviewMode && !category) return;
+    if (!reviewMode && !category) {
+      searchHasBeenSubmitted = true;
+      loadObservations();
+      return;
+    }
     reviewMode = Boolean(category);
     if (category) reviewCategory = category;
     updateReviewControls();

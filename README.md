@@ -21,8 +21,8 @@ review categories use the same filters and results as the explorer. Existing
 standalone page links remain available.
 
 The explorer opens with blank filters and does not request observations until
-the visitor submits a search or selects a review category. Filters are collapsed
-by default. The workflow precomputes sequence match counts and review flags and
+the visitor submits a search or selects an observation category. Filters are
+collapsed by default. The workflow precomputes sequence match counts and review flags and
 publishes a compact
 search index and observation detail shards. The browser downloads the index and
 the shards needed for the current results; it does not build a persistent
