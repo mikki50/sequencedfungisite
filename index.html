@@ -22,39 +22,47 @@
   .review-mode main { max-width: none; padding: 16px 24px; }
   header h1 { margin: 0 0 6px; }
   header p { margin: 0; opacity: .8; }
-  .about-link {
-    position: absolute;
-    top: 14px;
-    right: 30px;
-    color: white;
-    font-size: 12px;
-    opacity: .75;
-    text-decoration: none;
-  }
-  .about-link:hover { opacity: 1; text-decoration: underline; }
   .site-navigation {
     margin-top: 16px;
     padding-top: 12px;
     border-top: 1px solid #ffffff33;
   }
-  .site-navigation .review-link {
+  .site-navigation {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .site-navigation a {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
     padding: 9px 14px;
     border: 1px solid #d9e1d8;
     border-radius: 7px;
-    background: #f1f4ee;
-    color: #294b38;
+    color: white;
     font-size: 14px;
     font-weight: 700;
     text-decoration: none;
   }
-  .site-navigation .review-link:hover { background: white; }
-  .site-navigation .review-link span { font-size: 18px; line-height: 1; }
+  .site-navigation a:hover, .site-navigation a[aria-current="page"] {
+    background: #f1f4ee;
+    color: #294b38;
+  }
+  .review-categories { margin-bottom: 20px; }
+  .review-categories h2 { margin: 0 0 8px; font-size: 18px; }
+  .review-categories p { margin: 0 0 12px; color: #59645c; font-size: 14px; }
+  .review-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .review-buttons button {
+    padding: 9px 12px;
+    border: 1px solid #cbd5cc;
+    background: white;
+    color: #294b38;
+    font-size: 14px;
+  }
+  .review-buttons button[aria-pressed="true"] { background: #294b38; color: white; }
+  #siteViewFrame { display: block; width: 100%; min-height: 400px; border: 0; }
+  [hidden] { display: none !important; }
   @media (max-width: 520px) {
     header { padding: 54px 20px 20px; }
-    .about-link { right: 20px; }
   }
   main { max-width: 1250px; margin: auto; padding: 24px; }
   .controls {
@@ -305,17 +313,28 @@
 <body>
 
 <header>
-  <a class="about-link" href="about.html">About</a>
   <h1>🍄 iNaturalist Sequenced Fungi Explorer</h1>
   <p>Explore fungal observations with DNA barcode records</p>
   <nav class="site-navigation" aria-label="Site navigation">
-    <a class="review-link" href="review.html">
-      Review workspace <span aria-hidden="true">→</span>
-    </a>
+    <a href="#explore" data-view="explore" aria-current="page">Explore and review</a>
+    <a href="#taxonomy" data-view="taxonomy">Taxonomy tree</a>
+    <a href="#timeline" data-view="timeline">Sequences over time</a>
+    <a href="#about" data-view="about">About</a>
   </nav>
 </header>
 
 <main>
+  <div id="explorerView">
+  <section class="review-categories" aria-labelledby="reviewHeading">
+    <h2 id="reviewHeading">Review workspace</h2>
+    <p>Choose a category to review, or explore all observations.</p>
+    <div class="review-buttons" role="group" aria-label="Observation category">
+      <button type="button" data-review-category="" aria-pressed="true">All observations</button>
+      <button type="button" data-review-category="species-required" aria-pressed="false">Species level identification required</button>
+      <button type="button" data-review-category="mismatched-identifications" aria-pressed="false">Flagged for possible ID match</button>
+      <button type="button" data-review-category="not-research-grade" aria-pressed="false">Not research grade</button>
+    </div>
+  </section>
   <form id="filtersForm">
   <details id="reviewFilters" class="review-filter-disclosure" open>
     <summary>Filters</summary>
@@ -413,6 +432,8 @@
     </button>
   </div>
   <nav id="reviewPagination" class="review-pagination" aria-label="Result pages" hidden></nav>
+  </div>
+  <iframe id="siteViewFrame" title="Site content" hidden></iframe>
 </main>
 
 <script src="catalog-search.js"></script>
@@ -434,22 +455,35 @@ const REVIEW_CATEGORIES = [
   "not-research-grade"
 ];
 const initialPageParams = new URLSearchParams(window.location.search);
-const reviewMode = initialPageParams.get("review_mode") === "1";
+const legacyReviewMode = initialPageParams.get("review_mode") === "1";
+let reviewMode = legacyReviewMode || window.location.hash === "#review";
 let reviewCategory = REVIEW_CATEGORIES.includes(
   initialPageParams.get("inat_review_category")
 )
   ? initialPageParams.get("inat_review_category")
   : REVIEW_CATEGORIES[0];
 let reviewResultCount = 0;
-if (reviewMode) {
+if (legacyReviewMode) {
   document.body.classList.add("review-mode");
-  const reviewFilters = document.getElementById("reviewFilters");
-  const reviewFiltersSummary = reviewFilters.querySelector("summary");
-  reviewFilters.open = false;
-  reviewFiltersSummary.textContent = "Show filters";
-  reviewFilters.addEventListener("toggle", () => {
-    reviewFiltersSummary.textContent = reviewFilters.open ? "Hide filters" : "Show filters";
+  document.querySelector(".review-categories").hidden = true;
+}
+const reviewFilters = document.getElementById("reviewFilters");
+const reviewFiltersSummary = reviewFilters.querySelector("summary");
+reviewFilters.addEventListener("toggle", () => {
+  reviewFiltersSummary.textContent = reviewMode
+    ? (reviewFilters.open ? "Hide filters" : "Show filters")
+    : "Filters";
+});
+
+function updateReviewControls() {
+  document.querySelectorAll("[data-review-category]").forEach(button => {
+    button.setAttribute("aria-pressed", String(
+      reviewMode ? button.dataset.reviewCategory === reviewCategory : !button.dataset.reviewCategory
+    ));
   });
+  reviewFiltersSummary.textContent = reviewMode
+    ? (reviewFilters.open ? "Hide filters" : "Show filters")
+    : "Filters";
 }
 
 function fetchApi(url) {
@@ -658,11 +692,11 @@ function addMycoBlastAction(card, observation) {
     link.href = url;
     link.target = "_blank";
     link.rel = "noopener";
-    link.textContent = "MycoBLAST ↗";
+    link.textContent = "MycoMap BLAST Job ↗";
     actions.appendChild(link);
   } else if (getMycoBlastValue(observation)) {
     const message = document.createElement("span");
-    message.textContent = "Invalid MycoBLAST link";
+    message.textContent = "Invalid MycoMap BLAST Job link";
     actions.appendChild(message);
   }
 }
@@ -1321,6 +1355,7 @@ function scrollToResults() {
 function setReviewCategory(category) {
   if (!reviewMode || !REVIEW_CATEGORIES.includes(category) || reviewCategory === category) return;
   reviewCategory = category;
+  updateReviewControls();
   page = 1;
   saveSearchToHistory();
   if (indexedCatalog) {
@@ -1680,7 +1715,7 @@ function buildPageStateParams() {
     params.set("inat_project_id", String(selectedProjectId));
   }
   if (reviewMode) {
-    params.set("review_mode", "1");
+    if (legacyReviewMode) params.set("review_mode", "1");
     params.set("inat_review_category", reviewCategory);
   }
   return params;
@@ -1704,6 +1739,7 @@ function restoreSearchFromUrl() {
       category: reviewCategory
     });
   }
+  updateReviewControls();
   const hasSavedSearch = [
     "inat_search",
     "inat_taxon_id",
@@ -2603,6 +2639,99 @@ if (reviewMode && window.parent !== window && "ResizeObserver" in window) {
   new ResizeObserver(notifyReviewHeight).observe(document.body);
 }
 
+const siteViewFrame = document.getElementById("siteViewFrame");
+const embeddedViews = {
+  taxonomy: ["taxonomy.html", "Fungal taxonomy tree"],
+  timeline: ["sequence-timeline.html", "Sequences over time"],
+  about: ["about.html", "About this project"]
+};
+let frameObserver = null;
+let loadedView = "";
+
+function currentView() {
+  const view = window.location.hash.slice(1);
+  return view === "review" || view === "explore" || embeddedViews[view] ? view : "explore";
+}
+
+function showSiteView(view) {
+  const embedded = embeddedViews[view];
+  document.getElementById("explorerView").hidden = Boolean(embedded);
+  siteViewFrame.hidden = !embedded;
+  document.querySelectorAll("[data-view]").forEach(link => {
+    if (link.dataset.view === (embedded ? view : "explore")) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  });
+  if (embedded && loadedView !== view) {
+    if (frameObserver) frameObserver.disconnect();
+    siteViewFrame.style.height = "400px";
+    siteViewFrame.title = embedded[1];
+    loadedView = view;
+    siteViewFrame.contentWindow.location.replace(new URL(embedded[0], window.location.href).href);
+  }
+}
+
+siteViewFrame.addEventListener("load", () => {
+  if (frameObserver) frameObserver.disconnect();
+  const body = siteViewFrame.contentDocument.body;
+  const resize = () => {
+    if (!siteViewFrame.hidden) {
+      siteViewFrame.style.height = Math.max(400, Math.ceil(body.getBoundingClientRect().height)) + "px";
+    }
+  };
+  if ("ResizeObserver" in window) {
+    frameObserver = new ResizeObserver(resize);
+    frameObserver.observe(body);
+  }
+  resize();
+});
+
+document.querySelectorAll("[data-view]").forEach(link => {
+  link.addEventListener("click", event => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const view = link.dataset.view;
+    if (view === currentView()) return;
+    const wasReview = reviewMode;
+    if (view === "explore") reviewMode = false;
+    const url = new URL(window.location.href);
+    url.search = buildPageStateParams().toString();
+    url.hash = view;
+    history.pushState(null, "", url);
+    showSiteView(view);
+    window.scrollTo({ top: 0, behavior: "auto" });
+    if (view === "explore" && wasReview) {
+      reviewFilters.open = true;
+      updateReviewControls();
+      searchHasBeenSubmitted = true;
+      loadObservations();
+    }
+  });
+});
+
+document.querySelectorAll("[data-review-category]").forEach(button => {
+  button.addEventListener("click", () => {
+    const category = button.dataset.reviewCategory;
+    if (reviewMode && category) {
+      setReviewCategory(category);
+      return;
+    }
+    if (!reviewMode && !category) return;
+    reviewMode = Boolean(category);
+    if (category) reviewCategory = category;
+    reviewFilters.open = !reviewMode;
+    updateReviewControls();
+    const url = new URL(window.location.href);
+    url.search = buildPageStateParams().toString();
+    url.hash = reviewMode ? "review" : "explore";
+    history.pushState(null, "", url);
+    searchHasBeenSubmitted = true;
+    loadObservations();
+  });
+});
+
 document.getElementById("filtersForm").addEventListener("submit", event => {
   event.preventDefault();
   searchHasBeenSubmitted = true;
@@ -2611,9 +2740,16 @@ document.getElementById("filtersForm").addEventListener("submit", event => {
 });
 
 window.addEventListener("popstate", () => {
+  const view = currentView();
+  const wasReview = reviewMode;
+  reviewMode = legacyReviewMode || view === "review";
+  if (reviewMode !== wasReview) reviewFilters.open = !reviewMode;
+  showSiteView(view);
   restoreSearchFromUrl();
-  searchHasBeenSubmitted = true;
-  loadObservations();
+  if (view === "explore" || view === "review") {
+    searchHasBeenSubmitted = true;
+    loadObservations();
+  }
 });
 
 function refreshDisplayedResults() {
@@ -2704,6 +2840,8 @@ document.addEventListener("click", event => {
   }
 });
 
+if (reviewMode) reviewFilters.open = false;
+showSiteView(currentView());
 restoreSearchFromUrl();
 const sharedObservationIdParam = initialPageParams.get("observation_id");
 if (sharedObservationIdParam !== null) {

@@ -15,11 +15,17 @@ hourly data files to the source branch. The workflow removes its temporary
 deployment artifact after each run so hourly snapshots do not accumulate in
 Actions artifact storage.
 
+The homepage offers the explorer, review categories, taxonomy tree, sequence
+timeline, and project information without navigating to separate pages. The
+review categories use the same filters and results as the explorer. Existing
+standalone page links remain available.
+
 The explorer opens with blank filters and does not request observations until
-the visitor submits a search. The workflow precomputes sequence match counts
-and review flags and publishes a compact search index and observation detail
-shards. The browser downloads the index and the shards needed for the current
-results; it does not build a persistent full-catalog cache. The prototype
+the visitor submits a search or selects a review category. The workflow
+precomputes sequence match counts and review flags and publishes a compact
+search index and observation detail shards. The browser downloads the index and
+the shards needed for the current results; it does not build a persistent
+full-catalog cache. The prototype
 index was about 6.2 MB compressed, with a typical 30-result search downloading
 about 7 MB total before photos. Actual transfer and memory use vary by search
 and browser. Observation photos remain hosted by iNaturalist and are referenced
@@ -27,7 +33,7 @@ by URL. The legacy compressed catalog remains available to the workflow for
 incremental updates and to older site versions.
 Each observation card can share a link that opens the explorer filtered to and
 scrolled to that observation.
-Cards link to MycoMap BLAST results when an observation has a MycoMap BLAST
+Cards show a MycoMap BLAST Job link when an observation has a MycoMap BLAST
 Results field. The catalog sync stores this field in SQLite and publishes it
 with the observation details; cards do not make separate requests to look it up.
 When the catalog data version changes, the next sync performs a full rebuild

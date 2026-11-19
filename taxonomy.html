@@ -92,7 +92,8 @@ function renderNode(id, visible, expand) {
   const params = new URLSearchParams({
     inat_search: item.name, inat_taxon_id: String(item.id), from_taxonomy: "1"
   });
-  link.href = "index.html?" + params;
+  link.href = "./?" + params;
+  link.target = "_top";
   link.textContent = "View observations";
   actions.append(link);
   if (item.direct) actions.append(" · " + formatNumber.format(item.direct) + " identified directly as this taxon");
