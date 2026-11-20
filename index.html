@@ -2688,7 +2688,7 @@ document.querySelectorAll("[data-view]").forEach(link => {
     history.pushState(null, "", url);
     showSiteView(view);
     window.scrollTo({ top: 0, behavior: "auto" });
-    if (view === "explore" && wasReview) {
+    if (view === "explore" && (wasReview || !searchHasBeenSubmitted)) {
       updateReviewControls();
       searchHasBeenSubmitted = true;
       loadObservations();
@@ -2845,9 +2845,7 @@ if (sharedObservationIdParam !== null) {
     searchHasBeenSubmitted = true;
     loadObservations();
   }
-} else if (reviewMode) {
-  loadObservations();
-} else if (initialPageParams.get("from_taxonomy") === "1" && selectedTaxonId) {
+} else if (reviewMode || currentView() === "explore") {
   searchHasBeenSubmitted = true;
   loadObservations();
 }

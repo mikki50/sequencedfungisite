@@ -20,17 +20,15 @@ timeline, and project information without navigating to separate pages. The
 review categories use the same filters and results as the explorer. Existing
 standalone page links remain available.
 
-The explorer opens with blank filters and does not request observations until
-the visitor submits a search or selects an observation category. Filters are
-collapsed by default. The workflow precomputes sequence match counts and review flags and
-publishes a compact
-search index and observation detail shards. The browser downloads the index and
-the shards needed for the current results; it does not build a persistent
-full-catalog cache. The prototype index was about 6.2 MB compressed, with a
-typical 30-result search downloading
-about 7 MB total before photos. Actual transfer and memory use vary by search
-and browser. Observation photos remain hosted by iNaturalist and are referenced
-by URL. The legacy compressed catalog remains available to the workflow for
+The explorer loads observations on arrival, with filters collapsed by default.
+The workflow precomputes sequence match counts and review flags and publishes
+a compact search index and observation detail shards. The browser downloads the
+index and the shards needed for the current results; it does not build a
+persistent full-catalog cache. The prototype index was about 6.2 MB compressed,
+with a typical 30-result search downloading about 7 MB total before photos.
+Actual transfer and memory use vary by search and browser. Observation photos
+remain hosted by iNaturalist and are referenced by URL. The legacy compressed
+catalog remains available to the workflow for
 incremental updates and to older site versions.
 Each observation card can share a link that opens the explorer filtered to and
 scrolled to that observation.
