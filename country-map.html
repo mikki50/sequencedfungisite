@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequenced observations by country | Sequenced Fungi</title>
+<script>if (window.parent !== window) document.documentElement.classList.add("embedded-view");</script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f2; color: #26332b; }
+  header { background: #294b38; color: white; padding: 32px 24px; }
+  .wrap { max-width: 1080px; margin: auto; }
+  .eyebrow { color: #c5dbc8; font-size: 12px; font-weight: bold; letter-spacing: .12em; text-transform: uppercase; }
+  h1 { margin: 10px 0; font-size: clamp(30px, 5vw, 42px); }
+  header p { color: #dce8df; line-height: 1.5; margin: 0; }
+  .embedded-view header { background: transparent; padding: 0 24px; }
+  .embedded-view header .eyebrow { display: none; }
+  .embedded-view header h1 {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .embedded-view header p { color: #596c60; }
+  main { padding: 24px; }
+  .panel { padding: 22px; background: white; border: 1px solid #e0e8e0; border-radius: 12px; }
+  .intro, .stats { color: #596c60; line-height: 1.5; }
+  .intro { margin: 0 0 12px; }
+  .stats { font-size: 14px; }
+  #mapInfo { min-height: 1.5em; color: #294b38; font-weight: bold; }
+  #map { display: block; width: 100%; height: auto; background: #eaf3f4; border-radius: 8px; }
+  #map a { cursor: pointer; }
+  #map circle { fill: #b95d38; fill-opacity: .7; stroke: #71341e; }
+  #map .hit-area { fill: transparent; stroke: none; pointer-events: all; }
+  #borders { fill: none; stroke: #82988a; stroke-width: 1; pointer-events: none; }
+  #borders[hidden] { display: none; }
+  #map a:hover .marker, #map a:focus-visible .marker { fill: #793b24; fill-opacity: .95; stroke: #fff; }
+  #map a:focus-visible { outline: none; }
+  button { padding: 8px 12px; border: 1px solid #356d4b; border-radius: 6px; background: white; color: #294b38; cursor: pointer; font: inherit; }
+  button:focus-visible { outline: 3px solid #c99e2a; outline-offset: 2px; }
+  details { margin-top: 18px; }
+  summary { cursor: pointer; color: #356d4b; font-weight: bold; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 9px; border-bottom: 1px solid #e8eee8; text-align: left; }
+  th:last-child, td:last-child { text-align: right; }
+  a { color: #356d4b; }
+  a:focus-visible { outline: 3px solid #c99e2a; outline-offset: 2px; }
+  @media (max-width: 600px) {
+    .embedded-view header { padding: 0 16px; }
+    main { padding: 16px; }
+    .panel { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Sequenced fungi explorer</div>
+    <h1>Sequenced observations around the world</h1>
+    <p>Explore where fungal ITS barcode observations have been recorded.</p>
+  </div>
+</header>
+<main class="wrap">
+  <section class="panel" aria-label="Observations by country">
+    <p class="intro">Circle size shows the number of sequenced observations. Select a country circle to zoom in, then select a state or province circle to explore its observations. Use the country list below to explore countries.</p>
+    <p class="stats">Counts represent observations with valid ITS sequences, not distinct DNA sequences or species. Markers show approximate country positions, not individual observations. Some observations cannot be assigned to a country; observations in overlapping iNaturalist places may appear in more than one count.</p>
+    <p id="status" class="stats" role="status" aria-live="polite">Loading country counts...</p>
+    <div id="mapContent" hidden>
+      <p id="mapInfo" aria-live="polite">Hover over or focus a circle to see its count.</p>
+      <p id="mapError" role="alert" hidden>Could not load the world map. Use the country list below instead.</p>
+      <p id="borderError" role="alert" hidden>Could not load state and province borders. Counts are still available.</p>
+      <button id="backToWorld" type="button" hidden>Back to world map</button>
+      <p id="regionSummary" class="stats" hidden></p>
+      <svg id="map" viewBox="-30 -30 1020 540" aria-label="World map of sequenced observations by country">
+        <image href="world-map.svg" x="-960" y="0" width="960" height="480" aria-hidden="true"></image>
+        <image id="mapImage" href="world-map.svg" x="0" y="0" width="960" height="480" aria-hidden="true"></image>
+        <image href="world-map.svg" x="960" y="0" width="960" height="480" aria-hidden="true"></image>
+        <g id="borders" hidden aria-hidden="true"></g>
+        <g id="hitAreas" aria-hidden="true"></g>
+        <g id="markers"></g>
+      </svg>
+      <details id="regionList" hidden>
+        <summary>View states and provinces</summary>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">State or province</th><th scope="col">Observations</th></tr></thead>
+            <tbody id="regionRows"></tbody>
+          </table>
+        </div>
+      </details>
+      <details>
+      <summary>View all countries and territories</summary>
+      <p class="stats">Select a country or the unrecognised-country row to view its observations. Circle area increases with the observation count.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">Country or territory</th><th scope="col">Observations</th></tr></thead>
+          <tbody id="countryRows"></tbody>
+        </table>
+      </div>
+      </details>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+
+const svgNamespace = "http://www.w3.org/2000/svg";
+const status = document.getElementById("status");
+const mapInfo = document.getElementById("mapInfo");
+const defaultMapInfo = mapInfo.textContent;
+const formatNumber = new Intl.NumberFormat();
+const map = document.getElementById("map");
+const markers = document.getElementById("markers");
+const hitAreas = document.getElementById("hitAreas");
+const borders = document.getElementById("borders");
+const backToWorld = document.getElementById("backToWorld");
+let allCountries = [];
+let bordersPromise = null;
+document.getElementById("mapImage").addEventListener("error", () => {
+  document.getElementById("mapError").hidden = false;
+});
+
+function countryUrl(country) {
+  const params = new URLSearchParams({
+    inat_location: country.name,
+    inat_place_id: String(country.id)
+  });
+  return "./?" + params;
+}
+
+function regionUrl(country, region) {
+  const params = new URLSearchParams({
+    inat_location: region.name,
+    inat_place_id: String(region.id),
+    inat_country_place_id: String(country.id)
+  });
+  return "./?" + params;
+}
+
+async function loadBorders() {
+  if (!bordersPromise) {
+    bordersPromise = (async () => {
+      const response = await fetch("state-borders.svg");
+      if (!response.ok) throw new Error("State border request failed: " + response.status);
+      const svgDocument = new DOMParser().parseFromString(await response.text(), "image/svg+xml");
+      const path = svgDocument.querySelector("#state-borders");
+      if (!path || !path.getAttribute("d")) throw new Error("Invalid state border data.");
+      [-960, 0, 960].forEach(offset => {
+        const line = document.createElementNS(svgNamespace, "path");
+        line.setAttribute("d", path.getAttribute("d"));
+        line.setAttribute("transform", "translate(" + offset + " 0)");
+        line.setAttribute("vector-effect", "non-scaling-stroke");
+        borders.appendChild(line);
+      });
+    })().catch(error => {
+      bordersPromise = null;
+      throw error;
+    });
+  }
+  return bordersPromise;
+}
+
+function placeDescription(place) {
+  return place.name + ": " + formatNumber.format(place.count) +
+    " sequenced observation" + (place.count === 1 ? "" : "s");
+}
+
+function markerFor(place, maxCount, scale, centerX, onSelect, href) {
+  const description = placeDescription(place);
+  const marker = document.createElementNS(svgNamespace, "a");
+  if (onSelect) {
+    marker.setAttribute("href", "#");
+    marker.setAttribute("aria-label", description + ". Zoom to country.");
+  } else {
+    marker.setAttribute("href", href);
+    marker.setAttribute("target", "_top");
+    marker.setAttribute("aria-label", description + ". View observations.");
+  }
+  let x = (place.lon + 180) * 960 / 360;
+  x += Math.round((centerX - x) / 960) * 960;
+  const circle = document.createElementNS(svgNamespace, "circle");
+  circle.setAttribute("class", "marker");
+  circle.setAttribute("cx", String(x));
+  circle.setAttribute("cy", String((90 - place.lat) * 480 / 180));
+  circle.setAttribute("r", String((Math.sqrt(place.count / maxCount) * 24 + 3) * scale));
+  circle.setAttribute("stroke-width", String(1.5 * scale));
+  const hitArea = circle.cloneNode();
+  hitArea.setAttribute("class", "hit-area");
+  hitArea.setAttribute("r", String(Math.max(10 * scale, Number(circle.getAttribute("r")))));
+  const hitLink = marker.cloneNode(false);
+  hitLink.removeAttribute("aria-label");
+  hitLink.setAttribute("aria-hidden", "true");
+  hitLink.setAttribute("tabindex", "-1");
+  hitLink.setAttribute("focusable", "false");
+  hitLink.appendChild(hitArea);
+  hitAreas.appendChild(hitLink);
+  const title = document.createElementNS(svgNamespace, "title");
+  title.textContent = description;
+  marker.append(circle, title);
+  [marker, hitLink].forEach(link => {
+    if (onSelect) link.addEventListener("click", event => { event.preventDefault(); onSelect(); });
+    ["pointerenter", "focus"].forEach(event => link.addEventListener(event, () => {
+      mapInfo.textContent = description;
+    }));
+    ["pointerleave", "blur"].forEach(event => link.addEventListener(event, () => {
+      mapInfo.textContent = defaultMapInfo;
+    }));
+  });
+  markers.appendChild(marker);
+}
+
+function showWorld() {
+  map.setAttribute("viewBox", "-30 -30 1020 540");
+  map.setAttribute("aria-label", "World map of sequenced observations by country");
+  hitAreas.replaceChildren();
+  markers.replaceChildren();
+  borders.setAttribute("hidden", "");
+  document.getElementById("borderError").hidden = true;
+  const maxCount = Math.max(1, ...allCountries.map(country => country.count));
+  allCountries.forEach(country => markerFor(country, maxCount, 1, 480, () => showCountry(country)));
+  backToWorld.hidden = true;
+  document.getElementById("regionSummary").hidden = true;
+  document.getElementById("regionList").hidden = true;
+  mapInfo.textContent = defaultMapInfo;
+}
+
+function showCountry(country) {
+  const bounds = country.bounds || [country.lon - 5, country.lat - 5, country.lon + 5, country.lat + 5];
+  const [west, south, rawEast, north] = bounds;
+  const east = rawEast < west ? rawEast + 360 : rawEast;
+  let left = (west + 180) * 960 / 360;
+  let right = (east + 180) * 960 / 360;
+  let top = (90 - north) * 480 / 180;
+  let bottom = (90 - south) * 480 / 180;
+  const centerX = (left + right) / 2;
+  country.regions.forEach(region => {
+    if (region.lat === null) return;
+    let x = (region.lon + 180) * 960 / 360;
+    x += Math.round((centerX - x) / 960) * 960;
+    const y = (90 - region.lat) * 480 / 180;
+    left = Math.min(left, x); right = Math.max(right, x);
+    top = Math.min(top, y); bottom = Math.max(bottom, y);
+  });
+  const width = Math.max(30, (right - left) * 1.2, (bottom - top) * 1.2 * 1020 / 540);
+  const height = width * 540 / 1020;
+  const x = (left + right - width) / 2;
+  const y = (top + bottom - height) / 2;
+  map.setAttribute("viewBox", [x, y, width, height].join(" "));
+  map.setAttribute("aria-label", country.name + " map of sequenced observations by state or province");
+  borders.removeAttribute("hidden");
+  document.getElementById("borderError").hidden = true;
+  loadBorders().catch(error => {
+    console.error("Could not load state borders.", error);
+    if (!borders.hasAttribute("hidden")) document.getElementById("borderError").hidden = false;
+  });
+  hitAreas.replaceChildren();
+  markers.replaceChildren();
+  const regions = [...country.regions].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  const maxCount = Math.max(1, ...regions.map(region => region.count));
+  const rows = document.getElementById("regionRows");
+  rows.replaceChildren();
+  regions.forEach(region => {
+    const url = regionUrl(country, region);
+    if (region.lat !== null) markerFor(region, maxCount, width / 1020, x + width / 2, null, url);
+    const row = document.createElement("tr");
+    const nameCell = document.createElement("td");
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_top";
+    link.textContent = region.name;
+    nameCell.appendChild(link);
+    if (region.lat === null) nameCell.append(" (position unavailable)");
+    const countCell = document.createElement("td");
+    countCell.textContent = formatNumber.format(region.count);
+    row.append(nameCell, countCell);
+    rows.appendChild(row);
+  });
+  backToWorld.hidden = false;
+  const summary = document.getElementById("regionSummary");
+  summary.textContent = country.name + ": " + formatNumber.format(country.count) +
+    " observations · " + formatNumber.format(country.unassigned_regions) +
+    " without a recognised state or province. " +
+    (regions.length ? "An observation can count in overlapping regions." : "No state or province counts are available.");
+  if (!country.bounds) summary.textContent += " Country bounds are unavailable; the zoom is approximate.";
+  summary.hidden = false;
+  const list = document.getElementById("regionList");
+  list.hidden = !regions.length;
+  list.open = false;
+  mapInfo.textContent = defaultMapInfo;
+}
+
+backToWorld.addEventListener("click", showWorld);
+
+function renderCountries(countries, unassigned) {
+  const rows = document.getElementById("countryRows");
+  const sorted = [...countries].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  allCountries = sorted;
+  sorted.forEach(country => {
+    const row = document.createElement("tr");
+    const nameCell = document.createElement("td");
+    const link = document.createElement("a");
+    link.href = countryUrl(country);
+    link.target = "_top";
+    link.textContent = country.name;
+    nameCell.appendChild(link);
+    const countCell = document.createElement("td");
+    countCell.textContent = formatNumber.format(country.count);
+    row.append(nameCell, countCell);
+    rows.appendChild(row);
+  });
+  const row = document.createElement("tr");
+  const nameCell = document.createElement("td");
+  const link = document.createElement("a");
+  link.href = "./?inat_location=No+recognised+country&inat_no_country=1";
+  link.target = "_top";
+  link.textContent = "No recognised country";
+  nameCell.appendChild(link);
+  const countCell = document.createElement("td");
+  countCell.textContent = formatNumber.format(unassigned);
+  row.append(nameCell, countCell);
+  rows.appendChild(row);
+  showWorld();
+}
+
+async function loadCountries() {
+  try {
+    if (typeof DecompressionStream === "undefined") throw new Error("This browser cannot read the compressed catalog.");
+    const base = new URL("data/", window.location.href);
+    const manifestResponse = await fetch(new URL("manifest.json", base), { cache: "no-cache" });
+    if (!manifestResponse.ok) throw new Error("Could not load catalog manifest (HTTP " + manifestResponse.status + ").");
+    const manifest = await manifestResponse.json();
+    if (!manifest.country_map) throw new Error("Country counts will be available after the next catalog deployment.");
+    const response = await fetch(new URL(manifest.country_map, base));
+    if (!response.ok || !response.body) throw new Error("Could not load country counts (HTTP " + response.status + ").");
+    const data = await new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json();
+    if (data.schema !== 2 || !Number.isInteger(data.total) || data.total < 0 ||
+        !Number.isInteger(data.unassigned) || data.unassigned < 0 || data.unassigned > data.total ||
+        !Number.isInteger(data.missing_places) || data.missing_places < 0 ||
+        data.total !== Number(manifest.records) || !Array.isArray(data.countries)) {
+      throw new Error("The country counts do not match the catalog.");
+    }
+    const ids = new Set();
+    let totalCounts = 0;
+    data.countries.forEach(country => {
+      if (!Number.isSafeInteger(country.id) || country.id <= 0 || ids.has(country.id) ||
+          typeof country.name !== "string" || !country.name.trim() ||
+          !Number.isFinite(country.lat) || country.lat < -90 || country.lat > 90 ||
+          !Number.isFinite(country.lon) || country.lon < -180 || country.lon > 180 ||
+          !Number.isInteger(country.count) || country.count <= 0 || country.count > data.total - data.unassigned ||
+          !Number.isInteger(country.unassigned_regions) || country.unassigned_regions < 0 ||
+          country.unassigned_regions > country.count || !Array.isArray(country.regions) ||
+          (country.bounds !== null && (!Array.isArray(country.bounds) || country.bounds.length !== 4 ||
+           country.bounds.some(value => !Number.isFinite(value)) ||
+           country.bounds[0] < -180 || country.bounds[0] > 180 || country.bounds[2] < -180 || country.bounds[2] > 180 ||
+           country.bounds[1] < -90 || country.bounds[3] > 90 || country.bounds[1] > country.bounds[3]))) {
+        throw new Error("Invalid country count.");
+      }
+      const regionIds = new Set();
+      country.regions.forEach(region => {
+        if (!Number.isSafeInteger(region.id) || region.id <= 0 || regionIds.has(region.id) ||
+            typeof region.name !== "string" || !region.name.trim() ||
+            !Number.isInteger(region.count) || region.count <= 0 || region.count > country.count ||
+            !((region.lat === null && region.lon === null) ||
+              (Number.isFinite(region.lat) && region.lat >= -90 && region.lat <= 90 &&
+               Number.isFinite(region.lon) && region.lon >= -180 && region.lon <= 180))) {
+          throw new Error("Invalid state or province count.");
+        }
+        regionIds.add(region.id);
+      });
+      ids.add(country.id);
+      totalCounts += country.count;
+    });
+    if (totalCounts < data.total - data.unassigned) throw new Error("The country counts are incomplete.");
+    renderCountries(data.countries, data.unassigned);
+    status.textContent = formatNumber.format(data.total) + " catalog observations · " +
+      formatNumber.format(data.unassigned) + " without a recognised country place";
+    if (data.missing_places) status.textContent += " · " + formatNumber.format(data.missing_places) + " place IDs could not be resolved";
+    if (!data.countries.length) status.textContent += ". No countries have observations yet.";
+    document.getElementById("mapContent").hidden = false;
+  } catch (error) {
+    console.error("Could not load country counts.", error);
+    status.textContent = "Unable to load country counts: " + error.message;
+    status.setAttribute("role", "alert");
+  }
+}
+
+loadCountries();
+</script>
+</body>
+</html>

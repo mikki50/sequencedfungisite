@@ -43,11 +43,13 @@ jobs:
 
       - name: Test catalog builder
         run: python -m unittest discover -s tests
+      - name: Test catalog search
+        run: node tests/test_catalog_search.js
 
       - name: Prepare site files
         run: |
           mkdir -p _site
-          cp *.html *.js README.md _site/
+          cp *.html *.js *.svg README.md _site/
 
       - name: Update catalog
         env:

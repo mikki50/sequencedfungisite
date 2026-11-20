@@ -11,6 +11,8 @@ class CatalogSearch {
     this.baseUrl = baseUrl;
     this.details = new Map();
     this.hashes = new Map();
+    this.countryMapUrl = null;
+    this.countryIdsPromise = null;
     this.groups = Array.from({ length: data.groupCounts.length }, () => []);
     this.observationGroups = new Map();
     data.rows.forEach((row, position) => {
@@ -67,6 +69,30 @@ class CatalogSearch {
     }));
   }
 
+  async getCountryIds() {
+    if (!this.countryMapUrl) throw new Error("Country counts are not available in this catalog.");
+    if (!this.countryIdsPromise) {
+      this.countryIdsPromise = CatalogSearch.getGzip(this.countryMapUrl).then(summary => {
+        if (summary.schema !== 2 || summary.total !== this.data.rows.length ||
+            !Array.isArray(summary.countries)) {
+          throw new Error("Country counts do not match the search index.");
+        }
+        const ids = new Set();
+        summary.countries.forEach(country => {
+          if (!Number.isSafeInteger(country.id) || country.id <= 0 || ids.has(country.id)) {
+            throw new Error("Invalid country place ID in the catalog.");
+          }
+          ids.add(country.id);
+        });
+        return ids;
+      }).catch(error => {
+        this.countryIdsPromise = null;
+        throw error;
+      });
+    }
+    return this.countryIdsPromise;
+  }
+
   async findSequence(sequence) {
     if (!sequence) return null;
     if (!window.crypto?.subtle) throw new Error("This browser cannot search DNA sequences securely.");
@@ -110,9 +136,14 @@ class CatalogSearch {
         ? String(taxon[0]) === String(options.taxonId) ||
           taxon[2].some(id => String(id) === String(options.taxonId))
         : (taxon[1] || "").toLowerCase().includes(options.taxon);
-      const matchesPlace = options.placeId !== null
-        ? data.places[row[2]].some(id => String(id) === String(options.placeId))
-        : !options.location || data.locations[row[3]].toLowerCase().includes(options.location);
+      const placeIds = data.places[row[2]];
+      const matchesPlace = (options.countryIds
+        ? !placeIds.some(id => options.countryIds.has(id))
+        : options.placeId !== null
+          ? placeIds.some(id => String(id) === String(options.placeId))
+          : !options.location || data.locations[row[3]].toLowerCase().includes(options.location)) &&
+        (options.countryPlaceId === null ||
+         placeIds.some(id => String(id) === String(options.countryPlaceId)));
       const matchesUser = options.observerId !== null
         ? String(user[0]) === String(options.observerId)
         : !options.observer || (user[1] || "").toLowerCase().includes(options.observer);

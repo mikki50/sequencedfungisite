@@ -22,9 +22,11 @@ from typing import Any, Iterator
 
 if __package__:
     from .build_search_index import build_search_index
+    from .build_country_map import build_country_map
     from .build_taxonomy import build_taxonomy
 else:
     from build_search_index import build_search_index
+    from build_country_map import build_country_map
     from build_taxonomy import build_taxonomy
 
 
@@ -464,6 +466,12 @@ def build_catalog(
         index_count = build_search_index(connection, output_dir / "data" / index_dir)
         if index_count != record_count:
             raise RuntimeError("Search index and catalog record counts do not match.")
+        previous_places = (
+            urllib.parse.urljoin(base_url.rstrip("/") + "/", previous_manifest["place_metadata"])
+            if previous_manifest and previous_manifest.get("place_metadata")
+            else None
+        )
+        build_country_map(connection, output_dir / "data" / index_dir, request_json, previous_places)
         previous_taxonomy = (
             urllib.parse.urljoin(base_url.rstrip("/") + "/", previous_manifest["taxonomy"])
             if previous_manifest and previous_manifest.get("taxonomy") and not full_refresh
@@ -478,6 +486,8 @@ def build_catalog(
         "catalog_file": catalog_file,
         "search_index": f"{index_dir}/index.json.gz",
         "sequence_timeline": f"{index_dir}/sequence-timeline.json.gz",
+        "country_map": f"{index_dir}/country-map.json.gz",
+        "place_metadata": f"{index_dir}/place-metadata.json.gz",
         "taxonomy": f"{index_dir}/taxonomy.json.gz",
         "records": record_count,
         "generated_at": timestamp(utc_now()),

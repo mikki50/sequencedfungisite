@@ -19,6 +19,8 @@ from scripts.update_fungi_catalog import (
     write_catalog,
 )
 from scripts.build_search_index import build_search_index
+from scripts.build_country_map import build_country_map, place_metadata
+from scripts.build_admin_boundaries import paths as admin_boundary_paths
 from scripts.build_taxonomy import build_taxonomy
 
 
@@ -164,6 +166,8 @@ class CatalogSyncTests(unittest.TestCase):
                 with gzip.open(Path(temp_dir) / "data" / result["search_index"].replace("index.json.gz", "details/0.json.gz"), "rt", encoding="utf-8") as file:
                     details = json.load(file)
                 self.assertEqual(next(item for item in details if item["id"] == 12)["mycoblast_url"], url)
+                with gzip.open(Path(temp_dir) / "data" / result["country_map"], "rt", encoding="utf-8") as file:
+                    self.assertEqual(json.load(file)["total"], len(records))
 
     def test_sequence_dates_survive_sync_only_for_the_same_field(self):
         sequence = "ACGT" * 30
@@ -318,6 +322,165 @@ class TaxonomyTests(unittest.TestCase):
                 data = json.load(file)
             self.assertEqual(len(data["nodes"]), 2)
             self.assertEqual(data["missing_taxa"], 0)
+            connection.close()
+
+
+class CountryMapTests(unittest.TestCase):
+    def test_puerto_rico_has_its_own_map_entry_and_subdivisions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            places = [[6848, 11627], [6848], [1], [1, 6848, 11627], []]
+            connection.executemany(
+                "INSERT INTO observations VALUES (?, ?)",
+                [(i, json.dumps({"id": i, "place_ids": ids})) for i, ids in enumerate(places, 1)],
+            )
+            response = {"results": [
+                {"id": 1, "admin_level": 0},
+                {"id": 6848, "admin_level": 0},
+                {"id": 11627, "name": "Aguadilla", "admin_level": 10,
+                 "ancestor_place_ids": [6848], "location": "18.48,-67.14"},
+            ]}
+            build_country_map(connection, root / "out", lambda url, **kwargs: response)
+            with gzip.open(root / "out" / "country-map.json.gz", "rt", encoding="utf-8") as file:
+                data = json.load(file)
+            countries = {country["id"]: country for country in data["countries"]}
+            self.assertEqual((countries[6848]["name"], countries[6848]["count"]), ("Puerto Rico", 3))
+            self.assertEqual(countries[6848]["regions"][0]["count"], 2)
+            self.assertEqual(countries[6848]["unassigned_regions"], 1)
+            self.assertEqual(countries[1]["count"], 2)
+            self.assertEqual(data["unassigned"], 1)
+            connection.close()
+
+    def test_boundary_lines_split_at_the_antimeridian(self):
+        source = {"features": [{
+            "properties": {"featurecla": "Admin-1 boundary"},
+            "geometry": {"type": "LineString", "coordinates": [
+                [170, 1], [179, 2], [-179, 3], [-170, 4]
+            ]},
+        }, {
+            "properties": {"featurecla": "Admin-1 boundary indicator"},
+            "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+        }]}
+        segments = list(admin_boundary_paths(source))
+        self.assertEqual(len(segments), 2)
+        self.assertTrue(all(abs(segment[-1][0] - segment[0][0]) < 30 for segment in segments))
+
+    def test_antimeridian_region_center_and_missing_position(self):
+        country = {1: {"id": 1}}
+        region = {
+            "id": 10, "name": "Islands", "admin_level": 10,
+            "ancestor_place_ids": [1], "location": "2,0",
+            "bounding_box_geojson": {"coordinates": [[
+                [170, -2], [170, 6], [-170, 6], [-170, -2], [170, -2]
+            ]]},
+        }
+        self.assertEqual(place_metadata(region, country)["lon"], -180)
+        region["location"] = None
+        metadata = place_metadata(region, country)
+        self.assertIsNone(metadata["lat"])
+        self.assertIsNone(metadata["lon"])
+
+    def test_country_and_region_counts_follow_matching_place_ids(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            countries = [
+                {"id": 1, "name": "First", "lat": 10, "lon": 20},
+                {"id": 2, "name": "Second", "lat": -10, "lon": -20},
+            ]
+            country_file = root / "countries.json"
+            country_file.write_text(json.dumps(countries), encoding="utf-8")
+            places = [[1, 1, 10, 10, 99], [2, 20], [1, 2, 10, 20], [10], [], [1, 20]]
+            records = [
+                {"id": index, "place_ids": ids}
+                for index, ids in enumerate(places, 1)
+            ]
+            connection.executemany(
+                "INSERT INTO observations (id,payload) VALUES (?,?)",
+                [(record["id"], json.dumps(record)) for record in records],
+            )
+            response = {"results": [
+                {"id": 1, "admin_level": 0},
+                {"id": 2, "admin_level": 0},
+                {"id": 10, "name": "Region A", "admin_level": 10,
+                 "ancestor_place_ids": [1], "location": "11,21"},
+                {"id": 20, "name": "Region B", "admin_level": 10,
+                 "ancestor_place_ids": [2], "location": "-11,-21"},
+                {"id": 99, "admin_level": None},
+            ]}
+            with patch("scripts.build_country_map.COUNTRY_PLACES_PATH", country_file):
+                build_country_map(connection, root / "search", lambda url, **kwargs: response)
+            with gzip.open(root / "search" / "country-map.json.gz", "rt", encoding="utf-8") as file:
+                data = json.load(file)
+            self.assertEqual((data["total"], data["unassigned"], data["missing_places"]), (6, 2, 0))
+            first, second = data["countries"]
+            self.assertEqual((first["count"], first["unassigned_regions"]), (3, 1))
+            self.assertEqual((second["count"], second["unassigned_regions"]), (2, 0))
+            self.assertEqual(first["regions"], [
+                {"id": 10, "name": "Region A", "lat": 11.0, "lon": 21.0, "count": 2},
+            ])
+            self.assertEqual(second["regions"][0]["count"], 2)
+            connection.close()
+
+    def test_reuses_cache_and_retries_missing_places(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            connection.execute("INSERT INTO observations VALUES (?, ?)",
+                               (1, json.dumps({"id": 1, "place_ids": [1, 10, 99]})))
+            country_file = root / "countries.json"
+            country_file.write_text(json.dumps([{"id": 1, "name": "First", "lat": 0, "lon": 0}]),
+                                    encoding="utf-8")
+            previous = root / "previous.json.gz"
+            with gzip.open(previous, "wt", encoding="utf-8") as file:
+                json.dump({"schema": 1, "country_ids": [1], "places": {
+                    "1": {"bounds": None},
+                    "10": {"name": "Region", "lat": 1, "lon": 2, "countries": [1]},
+                }}, file)
+            requests = []
+            def request(url, **kwargs):
+                requests.append(url)
+                return {"results": []}
+            with patch("scripts.build_country_map.COUNTRY_PLACES_PATH", country_file), \
+                 patch("scripts.build_country_map.urllib.request.urlopen", return_value=previous.open("rb")):
+                build_country_map(connection, root / "out", request, "https://example.org/places.gz")
+            self.assertEqual(requests, ["https://api.inaturalist.org/v1/places/99"])
+            with gzip.open(root / "out" / "country-map.json.gz", "rt", encoding="utf-8") as file:
+                result = json.load(file)
+            self.assertEqual(result["missing_places"], 1)
+            self.assertEqual(result["countries"][0]["regions"][0]["count"], 1)
+            with gzip.open(root / "out" / "place-metadata.json.gz", "rt", encoding="utf-8") as file:
+                cache = json.load(file)
+            self.assertNotIn("99", cache["places"])
+            connection.close()
+
+    def test_country_snapshot_change_refreshes_cached_place_ancestry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            connection = connect_catalog(root / "catalog.sqlite")
+            connection.execute("INSERT INTO observations VALUES (?, ?)",
+                               (1, json.dumps({"id": 1, "place_ids": [1, 10]})))
+            country_file = root / "countries.json"
+            country_file.write_text(json.dumps([{"id": 1, "name": "First", "lat": 0, "lon": 0}]),
+                                    encoding="utf-8")
+            previous = root / "previous.json.gz"
+            with gzip.open(previous, "wt", encoding="utf-8") as file:
+                json.dump({"schema": 1, "country_ids": [], "places": {"1": None, "10": None}}, file)
+            requests = []
+            def request(url, **kwargs):
+                requests.append(url)
+                return {"results": [
+                    {"id": 1, "admin_level": 0},
+                    {"id": 10, "name": "Region", "admin_level": 10,
+                     "ancestor_place_ids": [1], "location": "0,0"},
+                ]}
+            with patch("scripts.build_country_map.COUNTRY_PLACES_PATH", country_file), \
+                 patch("scripts.build_country_map.urllib.request.urlopen", return_value=previous.open("rb")):
+                build_country_map(connection, root / "out", request, "https://example.org/places.gz")
+            self.assertEqual(requests, ["https://api.inaturalist.org/v1/places/1,10"])
+            with gzip.open(root / "out" / "country-map.json.gz", "rt", encoding="utf-8") as file:
+                self.assertEqual(json.load(file)["countries"][0]["regions"][0]["count"], 1)
             connection.close()
 
 

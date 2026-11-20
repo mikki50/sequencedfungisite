@@ -316,6 +316,7 @@
     <a href="#explore" data-view="explore" aria-current="page">Explore and review</a>
     <a href="#taxonomy" data-view="taxonomy">Taxonomy tree</a>
     <a href="#timeline" data-view="timeline">Sequences over time</a>
+    <a href="#map" data-view="map">World map</a>
     <a href="#about" data-view="about">About</a>
   </nav>
 </header>
@@ -433,7 +434,7 @@
   <iframe id="siteViewFrame" title="Site content" hidden></iframe>
 </main>
 
-<script src="catalog-search.js"></script>
+<script src="catalog-search.js?v=2"></script>
 <script>
 const API = "https://api.inaturalist.org/v1";
 const MATCH_SCAN_PAGE_SIZE = 200;
@@ -527,6 +528,8 @@ let selectedTaxonName = "";
 let taxonSearchTimer;
 let taxonSearchRequest = 0;
 let selectedPlaceId = null;
+let selectedCountryPlaceId = null;
+let selectedUnrecognisedCountry = false;
 let placeSearchTimer;
 let placeSearchRequest = 0;
 let selectedObserverId = null;
@@ -977,6 +980,7 @@ async function openIndexedCatalog() {
   if (index.data.rows.length !== Number(manifest.records)) {
     throw new Error("Search index and catalog record counts do not match.");
   }
+  if (manifest.country_map) index.countryMapUrl = new URL(manifest.country_map, baseUrl);
   return index;
 }
 
@@ -993,6 +997,8 @@ async function refreshIndexedResults() {
       ids: parseObservationIds(),
       location: document.getElementById("locationFilter").value.trim().toLowerCase(),
       placeId: selectedPlaceId,
+      countryPlaceId: selectedCountryPlaceId,
+      countryIds: selectedUnrecognisedCountry ? await indexedCatalog.getCountryIds() : null,
       observer: document.getElementById("observerFilter").value.trim().toLowerCase(),
       observerId: selectedObserverId,
       project: document.getElementById("projectFilter").value.trim(),
@@ -1052,6 +1058,11 @@ async function loadObservations(reset = true) {
     catalogMode = true;
     catalogDataPartial = false;
     return refreshIndexedResults();
+  }
+  if (selectedUnrecognisedCountry || selectedCountryPlaceId !== null) {
+    document.getElementById("results").replaceChildren();
+    showStatusError("This location filter requires the published search index.");
+    return;
   }
   if (loading) {
     if (catalogDataPartial) {
@@ -1694,6 +1705,8 @@ function buildPageStateParams() {
     setIfPresent("inat_match_threshold", document.getElementById("matchThreshold").value);
   }
   if (selectedPlaceId !== null) params.set("inat_place_id", String(selectedPlaceId));
+  if (selectedCountryPlaceId !== null) params.set("inat_country_place_id", String(selectedCountryPlaceId));
+  if (selectedUnrecognisedCountry) params.set("inat_no_country", "1");
   if (selectedObserverId !== null) {
     params.set("inat_observer_id", String(selectedObserverId));
   }
@@ -1740,6 +1753,8 @@ function restoreSearchFromUrl() {
     "inat_per_page",
     "inat_match_threshold",
     "inat_place_id",
+    "inat_country_place_id",
+    "inat_no_country",
     "inat_observer_id",
     "inat_project_id"
   ].some(key => params.has(key));
@@ -1787,6 +1802,16 @@ function restoreSearchFromUrl() {
   selectedPlaceId = placeId && Number.isFinite(Number(placeId))
     ? Number(placeId)
     : null;
+  selectedUnrecognisedCountry = params.get("inat_no_country") === "1";
+  const countryPlaceId = params.get("inat_country_place_id");
+  selectedCountryPlaceId = !selectedUnrecognisedCountry && selectedPlaceId !== null &&
+    countryPlaceId && Number.isSafeInteger(Number(countryPlaceId)) && Number(countryPlaceId) > 0
+    ? Number(countryPlaceId)
+    : null;
+  if (selectedUnrecognisedCountry) {
+    selectedPlaceId = null;
+    document.getElementById("locationFilter").value = "No recognised country";
+  }
   const observerId = hasSavedSearch ? params.get("inat_observer_id") : null;
   selectedObserverId = observerId && Number.isSafeInteger(Number(observerId)) &&
     Number(observerId) > 0
@@ -1948,6 +1973,8 @@ async function searchPlaces(query) {
       option.addEventListener("click", () => {
         document.getElementById("locationFilter").value = option.textContent;
         selectedPlaceId = place.id;
+        selectedCountryPlaceId = null;
+        selectedUnrecognisedCountry = false;
         suggestions.hidden = true;
       });
       suggestions.appendChild(option);
@@ -2505,6 +2532,8 @@ function renderObservations(indexedResult = null) {
               sequenceInput.value = sequence;
               locationInput.value = "";
               selectedPlaceId = null;
+              selectedCountryPlaceId = null;
+              selectedUnrecognisedCountry = false;
               document.getElementById("placeSuggestions").hidden = true;
               saveSearchToHistory();
               sequenceButton.disabled = true;
@@ -2629,6 +2658,7 @@ const siteViewFrame = document.getElementById("siteViewFrame");
 const embeddedViews = {
   taxonomy: ["taxonomy.html", "Fungal taxonomy tree"],
   timeline: ["sequence-timeline.html", "Sequences over time"],
+  map: ["country-map.html", "Sequenced observations by country"],
   about: ["about.html", "About this project"]
 };
 let frameObserver = null;
@@ -2792,6 +2822,8 @@ document.getElementById("resultsPerPage").addEventListener("change", event => {
 
 document.getElementById("locationFilter").addEventListener("input", event => {
   selectedPlaceId = null;
+  selectedCountryPlaceId = null;
+  selectedUnrecognisedCountry = false;
   clearTimeout(placeSearchTimer);
   const query = event.target.value.trim();
   if (query.length < 2) {
